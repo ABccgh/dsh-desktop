@@ -71,12 +71,20 @@
       <label for="graceMs">Shutdown grace (ms)</label>
       <input id="graceMs" type="number" min="0" max="120000" />
       <span class="hint">how long a quit waits for the child to die before giving up on confirming it</span>
+
+      <label for="maxWindows">Workspace windows</label>
+      <input id="maxWindows" type="number" min="1" max="8" />
+      <span class="hint">how many workspaces may be open at once; each one is a whole harness</span>
     </div>
 
     <h2>Behaviour</h2>
     <div class="row">
       <span>Closing the window</span>
       <span class="check"><input id="closeToTray" type="checkbox" /><label for="closeToTray">hide to the tray instead of quitting</label></span>
+
+      <label for="globalHotkey">Global shortcut</label>
+      <input id="globalHotkey" type="text" placeholder="Control+Alt+D" />
+      <span class="hint">shows or hides the window from anywhere; leave empty to disable</span>
     </div>
 
     <h2>About</h2>
@@ -90,11 +98,12 @@
       <button id="save" class="primary">Save</button>
       <button id="restart">Restart harness</button>
       <button id="defaults">Restore defaults</button>
+      <button id="diagnostics">Export diagnostics</button>
       <span id="status"></span>
     </footer>
 
     <script>
-      const fields = ['port', 'bootTimeoutMs', 'restartLimit', 'restartWindowMs', 'graceMs'];
+      const fields = ['port', 'bootTimeoutMs', 'restartLimit', 'restartWindowMs', 'graceMs', 'maxWindows'];
       const status = document.getElementById('status');
       let defaults = null;
 
@@ -106,6 +115,7 @@
       function fill(config) {
         for (const name of fields) document.getElementById(name).value = config[name];
         document.getElementById('closeToTray').checked = config.closeToTray === true;
+        document.getElementById('globalHotkey').value = config.globalHotkey ?? '';
       }
 
       function collect() {
@@ -114,6 +124,10 @@
           const raw = document.getElementById(name).value.trim();
           values[name] = raw === '' ? undefined : Number(raw);
         }
+        // Empty means "no hotkey", not "leave it alone": clearing the box is the
+        // only way to turn it off, and it is visible after a save.
+        const hotkey = document.getElementById('globalHotkey').value.trim();
+        values.globalHotkey = hotkey === '' ? null : hotkey;
         return values;
       }
 
@@ -155,6 +169,11 @@
 
       document.getElementById('open-logs').addEventListener('click', () => window.dshSettings.openPath('logs'));
       document.getElementById('open-data').addEventListener('click', () => window.dshSettings.openPath('data'));
+
+      document.getElementById('diagnostics').addEventListener('click', async () => {
+        const written = await window.dshSettings.exportDiagnostics();
+        say(written === null ? 'Could not write the bundle — see the log.' : 'Written to ' + written);
+      });
 
       load().catch((error) => say('Could not load settings: ' + error.message, true));
     </script>

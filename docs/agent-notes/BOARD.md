@@ -10,13 +10,39 @@ committed; M2–M6 are not started.**
 
 | Milestone | State |
 | --- | --- |
-| **M1** defects A1–A14, test hardening, `geometry`/`state` extracted | **done, verified, committed `402d2e3`** |
-| **M2** settings window (F1) | **done, verified, committed `c339dbd`** |
-| **M6 (part)** `bin/smoke.mjs` — the acceptance ladder as one command | **done, 12/12 checks pass** |
-| **M3** multi-window + tray/jump list (F2, F3) | not started |
-| **M4** hotkey, DSH version change, diagnostics export, CLI (F4–F7) | not started (`--settings` shipped with M2) |
-| **M5** rcedit exe icon + NSIS installer (D) | not started |
-| **M6 (rest)** docs, and the memory layers for M3–M5 | not started |
+| **M1** defects A1–A14, test hardening, `geometry`/`state` extracted | **done, verified** |
+| **M2** settings window (F1) | **done, verified** |
+| **M6 (part)** `bin/smoke.mjs` | **done, 12/12 checks pass** |
+| **M4** CLI, hotkey, jump list, DSH version change, diagnostics export | **done, verified** |
+| **M5** exe icon + version | **done, verified** (`exe ProductName reads back as "DSH Desktop"`) |
+| **M5** NSIS installer | **config written, NEVER RUN** — `npm run installer` exists but has not been executed, so the NSIS toolchain and the produced installer are both unproven |
+| **M3** multi-window | **NOT STARTED** — the largest item (973 lines, 113 references to one `win`); see below |
+| **M6 (rest)** docs for M3/M5 | not started |
+
+## M4 and M5, as verified
+
+| Item | Evidence |
+| --- | --- |
+| `--version` / `--help` | Printed and exited with **0 Electron processes** afterwards; they run before the single-instance lock, so they answer while another copy is running |
+| Global hotkey | `global hotkey registered: Control+Alt+D`; an accelerator someone else owns logs a refusal instead of failing startup |
+| Jump list | `jump list: ok (1 tasks)` — `setJumpList` **returns** its result, so the return value is logged rather than assumed |
+| DSH version change | Logged when `lastDshVersion` differs; recorded in `state.json` |
+| Diagnostics export | 7785 bytes, all six sections, **0 token leaks**; written by the same function the Help menu calls |
+| Exe icon and version | `exe ProductName reads back as "DSH Desktop"`, read back with rcedit's own getter |
+| Smoke child claiming | Now by **parentage**; a stray child can no longer make the assertion pass or fail for the wrong reason |
+
+**Two lessons from this milestone are recorded as decisions.** D-16: `rcedit@5.0.0`
+publishes `files: ["bin", "lib/index.d.ts"]` — the binary ships and the JS wrapper does
+**not**, so the binary is called directly. D-17: the earlier check that "proved" rcedit was
+usable listed files with a filter matching only what I expected to find, so it could not
+have revealed the missing wrapper — a filter that cannot falsify is not a check.
+
+**A related trap, measured the hard way:** the dev build (`electron.exe`) and the packaged
+build (`DSH Desktop.exe`) share one `userData`, and therefore one single-instance lock. A
+packaged instance left running at 15:15 silently rejected two later dev launches with
+`another instance owns the lock; exiting`, and the child I killed as "a stray" was *its*
+child, which its supervisor then correctly restarted. When a launch does nothing, check for
+**both** process names before concluding anything.
 
 ## What M1 changed, and how each was proved
 

@@ -12,6 +12,7 @@
  * @module dsh-desktop/bin/pack
  */
 
+import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -142,7 +143,59 @@ const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
 for (const key of ['devDependencies', 'scripts', 'private']) delete manifest[key];
 writeFileSync(join(APP_DIR, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
-// 5. Verify the result rather than assuming the copy order was right.
+// 5. Give the executable its own icon and version metadata.
+//
+//    Without this the packaged app wears Electron's icon in Explorer and reports
+//    Electron's file version.
+//
+//    The rcedit *binary* is called directly, because the published npm package
+//    ships `files: ["bin", "lib/index.d.ts"]` — the binary is there and the
+//    JavaScript wrapper is **not**, so `import { rcedit } from 'rcedit'` fails
+//    with `Cannot find module .../rcedit.js`. The flags below are the ones the
+//    binary itself prints, not ones inferred from its README (which documents
+//    only the missing wrapper).
+//
+//    Optional on purpose: a failure here must not fail a portable build that
+//    otherwise works.
+const RCEDIT_BINARY = join(ROOT, 'node_modules', 'rcedit', 'bin', 'rcedit-x64.exe');
+const ICON_ICO = join(ROOT, 'build', 'icon.ico');
+let metadataApplied = false;
+
+if (existsSync(RCEDIT_BINARY) && existsSync(ICON_ICO)) {
+  const edits = spawnSync(
+    RCEDIT_BINARY,
+    [
+      exeTarget,
+      '--set-icon',
+      ICON_ICO,
+      '--set-file-version',
+      manifest.version,
+      '--set-product-version',
+      manifest.version,
+      '--set-version-string',
+      'ProductName',
+      manifest.productName ?? 'DSH Desktop',
+      '--set-version-string',
+      'FileDescription',
+      'A desktop shell for DeepSeek Harness',
+      '--set-version-string',
+      'CompanyName',
+      manifest.productName ?? 'DSH Desktop',
+      '--set-version-string',
+      'LegalCopyright',
+      'MIT licensed',
+    ],
+    { encoding: 'utf8', windowsHide: true, timeout: 60_000 },
+  );
+  metadataApplied = edits.status === 0;
+  if (!metadataApplied) {
+    console.warn(`  note  rcedit exited ${String(edits.status)}: ${(edits.stderr ?? '').trim().slice(0, 200)}`);
+  }
+} else {
+  console.warn('  note  rcedit binary or build/icon.ico missing; run "npm run icon" first');
+}
+
+// 6. Verify the result rather than assuming the copy order was right.
 const packagedMain = readFileSync(join(APP_DIR, manifest.main), 'utf8');
 const checks = [
   [`launcher ${EXE_TARGET}`, existsSync(exeTarget)],
@@ -162,6 +215,24 @@ let failed = 0;
 for (const [label, ok] of checks) {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}`);
   if (!ok) failed += 1;
+}
+
+// The metadata step reported success; read it back with the binary's own getter,
+// because "rcedit exited 0" and "the exe now carries our version" are two
+// different claims.
+if (metadataApplied) {
+  const readBack = spawnSync(RCEDIT_BINARY, [exeTarget, '--get-version-string', 'ProductName'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 30_000,
+  });
+  const reported = (readBack.stdout ?? '').trim();
+  const expected = manifest.productName ?? 'DSH Desktop';
+  const matches = reported === expected;
+  console.log(`  ${matches ? 'ok  ' : 'FAIL'} exe ProductName reads back as ${JSON.stringify(reported)}`);
+  if (!matches) failed += 1;
+} else {
+  console.log('  note  exe metadata not applied (rcedit unavailable)');
 }
 
 console.log(`dsh-desktop: ${relative(ROOT, OUT_DIR)} is ${(treeSize(OUT_DIR) / 1024 / 1024).toFixed(1)} MB`);

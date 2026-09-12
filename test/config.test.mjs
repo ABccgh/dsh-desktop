@@ -32,6 +32,9 @@ test('valid values are kept', () => {
     bootTimeoutMs: 60_000,
     graceMs: 2000,
     closeToTray: true,
+    globalHotkey: 'Control+Shift+D',
+    notifyOnFailure: false,
+    maxWindows: 2,
   });
   assert.deepEqual(config, {
     port: 3081,
@@ -41,7 +44,26 @@ test('valid values are kept', () => {
     bootTimeoutMs: 60_000,
     graceMs: 2000,
     closeToTray: true,
+    globalHotkey: 'Control+Shift+D',
+    notifyOnFailure: false,
+    maxWindows: 2,
   });
+});
+
+test('the hotkey may be turned off with null, and refuses a blank string', () => {
+  assert.equal(normalizeConfig({ globalHotkey: null }).globalHotkey, null);
+  const problems = [];
+  const config = normalizeConfig({ globalHotkey: '   ' }, (p) => problems.push(p));
+  assert.equal(config.globalHotkey, DEFAULT_CONFIG.globalHotkey, 'blank falls back rather than disabling');
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /globalHotkey/);
+});
+
+test('maxWindows is bounded, and its bounds are inclusive', () => {
+  assert.equal(normalizeConfig({ maxWindows: 1 }).maxWindows, 1);
+  assert.equal(normalizeConfig({ maxWindows: 8 }).maxWindows, 8);
+  assert.equal(normalizeConfig({ maxWindows: 9 }, () => {}).maxWindows, DEFAULT_CONFIG.maxWindows);
+  assert.equal(normalizeConfig({ maxWindows: 0 }, () => {}).maxWindows, DEFAULT_CONFIG.maxWindows);
 });
 
 test('port 0 is a valid value, not a missing one', () => {

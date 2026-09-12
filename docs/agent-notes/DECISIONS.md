@@ -239,6 +239,50 @@ would reverse it. Never rewrite an entry; supersede it with a new one.
   than by the code under test is not a test.
 - **Reversed by:** nothing; this constrains the tests, not the code they cover.
 
+## D-16: How is the executable given its own icon and version?
+
+- **Decided:** By calling the **`rcedit` binary directly** with the flags it prints for
+  itself — `--set-icon`, `--set-file-version`, `--set-product-version`,
+  `--set-version-string <key> <value>` — and reading the result back with
+  `--get-version-string ProductName`.
+- **Because:** the published `rcedit@5.0.0` declares `files: ["bin", "lib/index.d.ts"]`.
+  The vendored binary is there and the **JavaScript wrapper is not published at all**, so
+  `import { rcedit } from 'rcedit'` fails with `Cannot find module .../rcedit.js` — and
+  because `bin/pack.mjs` treats metadata as optional, the failure was a warning and a
+  successful build, not an error. Verification is the binary's own getter rather than a
+  PowerShell property read, because "rcedit exited 0" and "the exe now carries our
+  version" are different claims. Measured after the change:
+  `exe ProductName reads back as "DSH Desktop"`.
+- **Rejected:** importing the wrapper (it does not exist), and going without metadata —
+  the packaged app then wears Electron's icon and reports Electron's version in Explorer.
+- **Reversed by:** rcedit publishing its wrapper again, at which point the import works and
+  the binary call becomes an unnecessary detail rather than a necessity.
+
+## D-17: Was the earlier evidence for "rcedit ships its own exe" sound?
+
+- **Decided:** No — the conclusion was right and the **check was shaped by the hypothesis**.
+- **Because:** the check listed the package's files with a filter of `\.exe$|package\.json$`,
+  which matched exactly the two things being looked for and therefore could not reveal that
+  no `.js` file is published. A filter that only looks for what you expect to see cannot
+  falsify your expectation. The fact it *did* establish — the binary is vendored, so no
+  GitHub download is needed — remains true and is what made the fix cheap.
+- **Rejected:** treating "the file list contains an .exe" as "the package is usable".
+- **Reversed by:** nothing. The lesson generalizes: when checking a package is usable,
+  list what is **absent** as well as what is present.
+
+## D-18: What identifies the harness child in the smoke test?
+
+- **Decided:** Its **parent process** — the app process the smoke test itself spawned.
+- **Because:** the previous check matched a global pattern across every `node.exe` on the
+  machine, so an unrelated child — a leftover from an earlier run, or one belonging to a
+  packaged instance sharing the same `userData` — made "exactly one harness child" pass or
+  fail for a reason with nothing to do with the app under test. This was not hypothetical:
+  it happened twice in one session, once as a phantom pass and once as a stray that had to
+  be hunted down.
+- **Rejected:** loosening the assertion to "at least one", which would make it always true.
+  The parentage claim keeps the assertion exact.
+- **Reversed by:** nothing; parentage is strictly more precise than a pattern match.
+
 ## D-14: How is the settings window built, and how does its page talk to the shell?
 
 - **Decided:** Its own `BrowserWindow` loading a hand-written `src/settings.html`, with a

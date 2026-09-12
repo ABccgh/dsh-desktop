@@ -27,6 +27,12 @@ export const DEFAULT_CONFIG = Object.freeze({
   graceMs: 8_000,
   /** Closing the window hides to the tray instead of quitting. */
   closeToTray: false,
+  /** Global shortcut that shows or hides the window; null disables it. */
+  globalHotkey: 'Control+Alt+D',
+  /** Tell the user through the tray when the harness gives up. */
+  notifyOnFailure: true,
+  /** How many workspace windows may be open at once. Each one is a whole harness. */
+  maxWindows: 4,
 });
 
 /**
@@ -66,6 +72,7 @@ export function normalizeConfig(raw, onProblem = () => {}) {
   // only by hand-editing the file that the app never shows a path to.
   integer('bootTimeoutMs', 30_000, 1_800_000);
   integer('graceMs', 0, 120_000);
+  integer('maxWindows', 1, 8);
 
   const workspace = raw.workspace;
   if (workspace !== undefined && workspace !== null) {
@@ -77,6 +84,29 @@ export function normalizeConfig(raw, onProblem = () => {}) {
   if (closeToTray !== undefined) {
     if (typeof closeToTray === 'boolean') config.closeToTray = closeToTray;
     else onProblem(`config.closeToTray must be a boolean, got ${JSON.stringify(closeToTray)}; using ${config.closeToTray}`);
+  }
+
+  const notifyOnFailure = raw.notifyOnFailure;
+  if (notifyOnFailure !== undefined) {
+    if (typeof notifyOnFailure === 'boolean') config.notifyOnFailure = notifyOnFailure;
+    else
+      onProblem(
+        `config.notifyOnFailure must be a boolean, got ${JSON.stringify(notifyOnFailure)}; using ${config.notifyOnFailure}`,
+      );
+  }
+
+  // Null disables the hotkey; a string is passed to Electron as-is, and a
+  // registration failure is reported at startup rather than refused here —
+  // whether an accelerator is available is not knowable until the app runs.
+  const globalHotkey = raw.globalHotkey;
+  if (globalHotkey !== undefined && globalHotkey !== null) {
+    if (typeof globalHotkey === 'string' && globalHotkey.trim() !== '') config.globalHotkey = globalHotkey.trim();
+    else
+      onProblem(
+        `config.globalHotkey must be a non-empty string or null, got ${JSON.stringify(globalHotkey)}; using ${config.globalHotkey}`,
+      );
+  } else if (globalHotkey === null) {
+    config.globalHotkey = null;
   }
 
   return config;

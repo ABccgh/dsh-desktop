@@ -14,12 +14,13 @@
  * @module dsh-desktop/main
  */
 
-import { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, screen, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, clipboard, dialog, globalShortcut, ipcMain, nativeImage, screen, shell } from 'electron';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { DEFAULT_CONFIG, normalizeConfig } from './config.mjs';
+import { buildDiagnostics } from './diagnostics.mjs';
 import { chooseGeometry } from './geometry.mjs';
 import { HarnessSupervisor } from './harness.mjs';
 import { resolveDshHome, resolveInstallAnchor, resolveNodeExe, workspaceFromArgv } from './paths.mjs';
@@ -41,6 +42,47 @@ app.setName(APP_NAME);
 process.stdout.on('error', () => {});
 process.stderr.on('error', () => {});
 
+// ---------------------------------------------------------------------------
+// Command line, answered before anything else happens
+// ---------------------------------------------------------------------------
+//
+// These must not take the single-instance lock, open a window, or spawn a
+// harness: `--version` is the first thing a support request asks for, and it has
+// to answer even while another copy is already running.
+
+const USAGE = `${APP_NAME} — a desktop shell for DeepSeek Harness.
+
+Usage:
+  DSH Desktop [folder]              open with that folder as the harness workspace
+  DSH Desktop --workspace <folder>  the same, spelled out
+  DSH Desktop --settings            open with the settings window showing
+  DSH Desktop --version             print versions and exit
+  DSH Desktop --help                print this and exit
+
+Closing the window quits unless closeToTray is set in
+%APPDATA%\\DSH Desktop\\config.json.
+`;
+
+/** The switches this shell owns, from argv. Electron's own are filtered out. */
+const cliSwitches = process.argv.slice(1).filter((argument) => argument.startsWith('-'));
+
+if (cliSwitches.includes('--version') || cliSwitches.includes('-V')) {
+  process.stdout.write(`${APP_NAME} ${app.getVersion()}\n`);
+  // Labelled deliberately: these are the versions Electron carries. The harness
+  // runs on the SYSTEM Node, which is a different version, and an unlabelled
+  // "Node x.y" here would invite exactly the wrong conclusion.
+  process.stdout.write(
+    `bundled with: Electron ${process.versions.electron} (its Node ${process.versions.node}, Chromium ${process.versions.chrome})\n`,
+  );
+  process.stdout.write(`harness runs on the Node found on PATH; see --settings for the resolved path\n`);
+  process.exit(0);
+}
+
+if (cliSwitches.includes('--help') || cliSwitches.includes('-h')) {
+  process.stdout.write(USAGE);
+  process.exit(0);
+}
+
 const USER_DATA = app.getPath('userData');
 const LOG_DIR = join(USER_DATA, 'logs');
 const CONFIG_PATH = join(USER_DATA, 'config.json');
@@ -61,6 +103,12 @@ let quitting = false;
 let settingsWin = null;
 /** The DSH version this shell actually booted, for the settings window. */
 let dshVersion = 'not found';
+/** Where the harness installation resolved to, for the diagnostics bundle. */
+let anchorInfo = {};
+/** The Node executable the child runs on, for the diagnostics bundle. */
+let nodeExePath = 'unknown';
+/** The port the current child reported, for the diagnostics bundle. */
+let currentPort = null;
 
 // ---------------------------------------------------------------------------
 // Logging. One file per run, under userData; the last ten are kept.
@@ -598,7 +646,9 @@ async function switchWorkspace(chosen) {
   log(`workspace switched to ${chosen}`);
   workspace = chosen;
   saveState({ lastWorkspace: chosen });
+  rememberWorkspace(chosen);
   currentUrl = null;
+  currentPort = null;
   harnessPageLoaded = false;
   showStatus(`Restarting DeepSeek Harness in ${chosen}…`);
   if (supervisor !== null) await supervisor.restartWith(chosen);
@@ -652,6 +702,21 @@ function buildMenu() {
       submenu: [
         { label: 'Show Log Folder', click: () => void shell.openPath(LOG_DIR) },
         {
+          label: 'Export Diagnostics…',
+          click: () => {
+            const written = exportDiagnostics();
+            if (written !== null && win !== null && !win.isDestroyed()) {
+              void dialog.showMessageBox(win, {
+                type: 'info',
+                title: APP_NAME,
+                message: 'Diagnostics written',
+                detail: `${written}\n\nIt contains versions, settings, state and the last three logs, with any token removed.`,
+                buttons: ['OK'],
+              });
+            }
+          },
+        },
+        {
           label: `About ${APP_NAME}`,
           click: () => {
             const options = {
@@ -687,7 +752,7 @@ function buildTray() {
   }
   try {
     tray = new Tray(nativeImage.createFromPath(ICON_PNG));
-    tray.setToolTip(APP_NAME);
+    tray.setToolTip(`${APP_NAME} — ${basename(workspace)}`);
     tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: `Show ${APP_NAME}`, click: () => (win === null ? createWindow() : (win.show(), win.focus())) },
@@ -772,6 +837,12 @@ function openSettingsWindow() {
         )
         .then((summary) => log(`DIAG settings round trip: ${String(summary)}`))
         .catch((error) => log(`DIAG settings round trip failed: ${error.message}`));
+      // Exercises the same function the Help menu calls, so the bundle's content
+      // and its redaction are checked without a mouse.
+      settingsWin?.webContents
+        .executeJavaScript('window.dshSettings.exportDiagnostics()', true)
+        .then((written) => log(`DIAG diagnostics export: ${String(written)}`))
+        .catch((error) => log(`DIAG diagnostics export failed: ${error.message}`));
     }
   });
   settingsWin
@@ -815,7 +886,12 @@ function registerSettingsIpc() {
     writeJson(CONFIG_PATH, next);
     // The supervisor holds this same object, so replacing its fields is what
     // makes restart policy and grace-period changes take effect immediately.
+    const hotkeyChanged = next.globalHotkey !== config.globalHotkey;
     Object.assign(config, next);
+    if (hotkeyChanged) {
+      globalShortcut.unregisterAll();
+      registerHotkey();
+    }
     log(`settings saved: ${JSON.stringify(next)}${problems.length > 0 ? ` (refused: ${problems.join('; ')})` : ''}`);
     return { config: next, problems };
   });
@@ -851,6 +927,162 @@ function registerSettingsIpc() {
     settingsWin?.close();
     return true;
   });
+
+  ipcMain.handle('diagnostics:export', () => exportDiagnostics());
+}
+
+// ---------------------------------------------------------------------------
+// Native surfaces: hotkey, jump list, diagnostics
+// ---------------------------------------------------------------------------
+
+/** How many workspaces the jump list and the recent list remember. */
+const MAX_RECENT_WORKSPACES = 6;
+
+/** Remember a workspace, newest first, and refresh the surfaces that show it. */
+function rememberWorkspace(dir) {
+  const previous = Array.isArray(state.recentWorkspaces)
+    ? state.recentWorkspaces.filter((candidate) => typeof candidate === 'string')
+    : [];
+  const next = [dir, ...previous.filter((candidate) => candidate !== dir)].slice(0, MAX_RECENT_WORKSPACES);
+  saveState({ recentWorkspaces: next });
+  refreshJumpList();
+  return next;
+}
+
+/**
+ * Rebuild the Windows jump list from the remembered workspaces.
+ *
+ * `app.setJumpList` returns the result rather than throwing, so the return value
+ * is logged: a jump list that silently failed is otherwise indistinguishable
+ * from one that is simply not there.
+ */
+function refreshJumpList() {
+  if (process.platform !== 'win32') return;
+  // On a first run there is no recent list yet, so the workspace actually in use
+  // seeds it — otherwise the jump list is empty exactly when a user first looks.
+  const remembered = Array.isArray(state.recentWorkspaces)
+    ? state.recentWorkspaces.filter((dir) => typeof dir === 'string')
+    : [];
+  const recent =
+    remembered.length > 0 ? remembered : typeof state.lastWorkspace === 'string' ? [state.lastWorkspace] : [];
+  const base = app.isPackaged ? [] : [app.getAppPath()];
+  const tasks = [
+    { type: 'task', title: `Open ${APP_NAME}`, program: process.execPath, args: [...base] },
+    ...recent.map((dir) => ({
+      type: 'task',
+      title: `Open ${basename(dir)}`,
+      program: process.execPath,
+      args: [...base, dir],
+    })),
+  ];
+  try {
+    log(`jump list: ${String(app.setJumpList([{ type: 'tasks', items: tasks }]))} (${tasks.length} tasks)`);
+  } catch (error) {
+    log(`could not build the jump list: ${error.message}`);
+  }
+}
+
+/**
+ * Claim the global shortcut, or say why not.
+ *
+ * An accelerator another program owns is not a startup failure: `register`
+ * returns false, and the shell carries on without it.
+ */
+function registerHotkey() {
+  const accelerator = config.globalHotkey;
+  if (accelerator === null) {
+    log('global hotkey disabled by config');
+    return;
+  }
+  try {
+    const claimed = globalShortcut.register(accelerator, () => {
+      if (win === null || win.isDestroyed()) return;
+      if (win.isVisible() && !win.isMinimized()) {
+        win.hide();
+      } else {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+      }
+    });
+    log(
+      claimed
+        ? `global hotkey registered: ${accelerator}`
+        : `could not register ${accelerator}: another program already owns it`,
+    );
+  } catch (error) {
+    log(`could not register ${accelerator}: ${error.message}`);
+  }
+}
+
+/**
+ * Notice that the installed DSH changed under us.
+ *
+ * The shell follows the installation through a junction, so an upgrade is picked
+ * up automatically — which is exactly why it is worth saying out loud when it
+ * happens, rather than letting a different harness appear with no explanation.
+ *
+ * @param version - the version this boot found.
+ */
+function noteDshVersion(version) {
+  const previous = typeof state.lastDshVersion === 'string' ? state.lastDshVersion : null;
+  if (previous === null) {
+    saveState({ lastDshVersion: version });
+    return;
+  }
+  if (previous !== version) {
+    log(`the installed DSH changed: ${previous} -> ${version}`);
+    saveState({ lastDshVersion: version });
+  }
+}
+
+/**
+ * Write a support bundle and reveal it.
+ *
+ * Everything in it goes through the aggressive redactor, because this is the one
+ * file whose whole purpose is to leave this machine.
+ *
+ * @returns the path written.
+ */
+function exportDiagnostics() {
+  const wanted = readdirSync(LOG_DIR)
+    .filter((name) => name.startsWith('app-') && name.endsWith('.log'))
+    .map((name) => ({ name, at: statSync(join(LOG_DIR, name)).mtimeMs }))
+    .sort((a, b) => a.at - b.at)
+    .slice(-3);
+  const logs = wanted.map(({ name }) => {
+    try {
+      return { name, text: readFileSync(join(LOG_DIR, name), 'utf8') };
+    } catch (error) {
+      return { name, text: `(unreadable: ${error.message})` };
+    }
+  });
+
+  const text = buildDiagnostics({
+    versions: {
+      app: app.getVersion(),
+      electron: process.versions.electron,
+      node: process.versions.node,
+      dsh: dshVersion,
+    },
+    anchor: anchorInfo,
+    runtime: { userData: USER_DATA, logDir: LOG_DIR, nodeExe: nodeExePath, home: app.getPath('home') },
+    windows: [{ id: 1, workspace, port: currentPort, state: currentUrl === null ? 'starting' : 'ready' }],
+    config,
+    state,
+    logs,
+  });
+
+  const target = join(USER_DATA, `diagnostics-${timestamp().replace(/[:.]/g, '-')}.txt`);
+  try {
+    writeFileSync(target, text, 'utf8');
+    log(`diagnostics written to ${target}`);
+    void shell.openPath(USER_DATA);
+  } catch (error) {
+    log(`could not write the diagnostics bundle: ${error.message}`);
+    return null;
+  }
+  return target;
 }
 
 // ---------------------------------------------------------------------------
@@ -899,6 +1131,8 @@ if (!app.requestSingleInstanceLock()) {
     buildMenu();
     buildTray();
     registerSettingsIpc();
+    registerHotkey();
+    refreshJumpList();
     if (process.argv.includes('--settings')) openSettingsWindow();
 
     // Reap a child left behind by a previous run before starting a new one, so
@@ -920,6 +1154,9 @@ if (!app.requestSingleInstanceLock()) {
       nodeExe = resolveNodeExe();
       anchor = resolveInstallAnchor(dshHome);
       dshVersion = anchor.version;
+      anchorInfo = { dir: anchor.dir, binPath: anchor.binPath };
+      nodeExePath = nodeExe;
+      noteDshVersion(anchor.version);
       log(`node: ${nodeExe}`);
       log(`dsh: ${anchor.version} at ${anchor.dir}`);
     } catch (error) {
@@ -940,6 +1177,7 @@ if (!app.requestSingleInstanceLock()) {
         // the origin (useful, and dead the moment this process exits), never the
         // token, and the log gets neither.
         currentUrl = url.href;
+        currentPort = url.port;
         saveState({ lastWorkspace: workspace, guiUrl: url.origin });
         log(`loading ${url.origin}/ (token withheld from the log and the state file)`);
         // The token exchange answers 303 and redirects to the clean root, so the
@@ -1003,6 +1241,9 @@ if (!app.requestSingleInstanceLock()) {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
+    // Give the accelerator back: a registered shortcut outlives the window that
+    // wanted it until the process ends, and this process may take a while to.
+    globalShortcut.unregisterAll();
     saveWindowGeometry();
     const stopping = supervisor === null ? Promise.resolve({ gone: true }) : supervisor.stop();
     // A hard bound on top of the supervisor's own. `stop()` always settles

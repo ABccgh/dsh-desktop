@@ -1,0 +1,48 @@
+# electron-builder configuration — the INSTALLER target only.
+#
+# `bin/pack.mjs` stays the portable path and the primary one: it has no
+# dependencies, it works with no network, and it is what `npm run pack` produces.
+# This file exists because a real installer needs NSIS, and NSIS comes from
+# electron-builder's own toolchain.
+#
+# Its toolchain is fetched at build time, and on this machine the GitHub route is
+# unreliable, so the mirror is required:
+#
+#   $env:ELECTRON_BUILDER_BINARIES_MIRROR='https://registry.npmmirror.com/-/binary/electron-builder-binaries/'
+#   npm run installer
+#
+# Uninstall leaves nothing behind: it removes the Start Menu entry, the Desktop
+# shortcut and the per-user install directory.
+
+appId: com.dsh.desktop
+productName: DSH Desktop
+copyright: DSH Desktop
+
+directories:
+  # Deliberately not `dist/`, which `bin/pack.mjs` owns and replaces wholesale.
+  output: dist-installer
+  buildResources: build
+
+# The app has no runtime dependencies of its own, so this is the whole payload.
+files:
+  - src/**/*
+  - package.json
+  - build/icon.png
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  # No code signing: it needs a certificate, and an unsigned build is what a
+  # personal install expects. Windows will show SmartScreen's first-run warning.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DSH Desktop
+  artifactName: DSH-Desktop-Setup-${version}.${ext}

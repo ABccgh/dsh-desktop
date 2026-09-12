@@ -84,6 +84,36 @@ export function redactToken(text) {
 }
 
 /**
+ * Strip anything that could be a launch token, with a deliberately wider net
+ * than {@link redactToken}.
+ *
+ * Two rules, because a bundle that leaves the machine has a different budget for
+ * false positives than a log that stays on it:
+ *
+ * 1. **Keyed**, in every spelling a URL, an argv, or a sentence can produce:
+ *    `?token=`, `&token=`, `token:`, `TOKEN=`, `--token=`. `redactToken` only
+ *    covers the `?`/`&` form, which is why this exists — a value carried by
+ *    `--token <value>` walked straight through it.
+ * 2. **By shape**: any run of exactly 43 base64url characters. A launch token is
+ *    `randomBytes(32).toString('base64url')`, which is always 43 characters, so
+ *    this catches a token that reached the bundle by a route no key named.
+ *
+ * The cost is stated: rule 2 will also redact an unrelated 43-character
+ * identifier. That is the right trade for a file the user is about to paste
+ * somewhere, and it is the opposite trade from the live log, which keeps
+ * {@link redactToken} so its lines stay readable.
+ *
+ * @param text - any text that might carry a token.
+ * @returns the text with token-shaped runs replaced by `***`.
+ */
+export function redactTokenLike(text) {
+  if (typeof text !== 'string') return text;
+  return text
+    .replace(/\btoken\s*[=:]\s*[^\s&,)"']*/gi, 'token=***')
+    .replace(/[A-Za-z0-9_-]{43}/g, '***');
+}
+
+/**
  * Shorten text bound for the log.
  *
  * The harness GUI's own console output is diagnostic gold and log poison: one

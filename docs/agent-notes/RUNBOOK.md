@@ -58,10 +58,29 @@ It leaves the app running if it fails, deliberately, so the state can be inspect
 ## Build and install
 
 ```powershell
-npm run icon        # build/icon.png + build/icon.ico, from src/icon.svg
-npm run pack        # dist\DSH Desktop\DSH Desktop.exe
+npm run icon        # build/icon.png + build/icon.ico, from the installed DSH favicon
+npm run pack        # dist\DSH Desktop\DSH Desktop.exe — portable, needs no extra toolchain
 npm run shortcut    # Start Menu + Desktop .lnk for the packed app
 ```
+
+### The installer target
+
+```powershell
+# electron-builder's own toolchain (NSIS) is fetched at build time, and the GitHub
+# route is unreliable on this machine, so the mirror is required.
+$env:ELECTRON_BUILDER_BINARIES_MIRROR='https://registry.npmmirror.com/-/binary/electron-builder-binaries/'
+npm run installer   # dist-installer\DSH-Desktop-Setup-<version>.exe
+```
+
+`bin/pack.mjs` stays the primary path: zero dependencies, no network, and it is what
+`npm run pack` produces. The installer exists because NSIS cannot be hand-rolled.
+
+**The exe icon and version come from `rcedit`'s binary, called directly** — not its
+JavaScript API. The published package ships `files: ["bin", "lib/index.d.ts"]`: the
+binary is there and the wrapper is **not**, so `import { rcedit } from 'rcedit'` fails
+with `Cannot find module .../rcedit.js`. The flags in `bin/pack.mjs` are the ones the
+binary prints for itself (`--set-icon`, `--set-file-version`, `--set-version-string`),
+and the build reads the result back with `--get-version-string ProductName`.
 
 ## Debug
 

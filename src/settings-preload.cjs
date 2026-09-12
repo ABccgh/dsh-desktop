@@ -28,4 +28,6 @@ contextBridge.exposeInMainWorld('dshSettings', {
   openPath: (which) => ipcRenderer.invoke('settings:open-path', which),
   /** Close this window. */
   close: () => ipcRenderer.invoke('settings:close'),
+  /** Write a support bundle; resolves to its path, or null on failure. */
+  exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
 });

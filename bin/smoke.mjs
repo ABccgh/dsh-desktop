@@ -71,13 +71,23 @@ function listenerOn(port) {
 }
 
 /**
- * Harness children spawned by this shell, identified the way the reaper does.
+ * The harness children belonging to one app process.
+ *
+ * Claimed by **parentage**, not by a global pattern match. A pattern finds every
+ * harness child on the machine — including one left behind by an earlier run, or
+ * one belonging to a packaged instance running from the same userData — and then
+ * "exactly one child" passes or fails for a reason that has nothing to do with
+ * the app under test. Measured: an unrelated instance's child made an earlier
+ * version of this script report a phantom.
+ *
+ * @param appPid - the app process whose children to claim.
  * @returns the pids.
  */
-function harnessChildren() {
+function harnessChildren(appPid) {
+  if (!Number.isInteger(appPid) || appPid <= 0) return [];
   const out = ps(
     `Get-CimInstance Win32_Process -Filter "Name='node.exe'" | ` +
-      `Where-Object { $_.CommandLine -match 'bin\\.js"?\\s+--profile web' } | ` +
+      `Where-Object { $_.ParentProcessId -eq ${appPid} -and $_.CommandLine -match 'bin\\.js' } | ` +
       `ForEach-Object { $_.ProcessId }`,
   );
   return out === '' ? [] : out.split(/\s+/).map(Number).filter(Number.isInteger);
@@ -164,7 +174,7 @@ const after = readFileSync(log ?? '', 'utf8');
 check('the interface mounted', /interface mounted: true/.test(after));
 check('the token never reached the log', !/token=(?!\*\*\*)/.test(after));
 
-const children = harnessChildren();
+const children = harnessChildren(appPid);
 check('exactly one harness child is running', children.length === 1, `pids=[${children.join(',')}]`);
 check('the child owns the readiness port', listenerOn(port) === children[0], `listener=${String(listenerOn(port))}`);
 
@@ -187,8 +197,8 @@ check('the user\'s own GUI is untouched while we run', listenerOn(3080) === pid3
 // `taskkill /PID <pid> /T` without `/F` left the app running.
 process.stdout.write('\n  closing the app…\n');
 ps(`(Get-Process -Id ${String(appPid)} -ErrorAction SilentlyContinue).CloseMainWindow() | Out-Null`);
-const gone = await waitFor('the app to exit', () => harnessChildren().length === 0, 40_000);
-check('quitting reaped the harness child', gone, `remaining=[${harnessChildren().join(',')}]`);
+const gone = await waitFor('the app to exit', () => harnessChildren(appPid).length === 0, 40_000);
+check('quitting reaped the harness child', gone, `remaining=[${harnessChildren(appPid).join(',')}]`);
 check('the user\'s own GUI outlived us', listenerOn(3080) === pid3080Before, `3080=${String(listenerOn(3080))}`);
 check('the child record was cleared on a clean quit', (() => {
   try {
