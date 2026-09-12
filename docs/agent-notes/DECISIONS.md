@@ -239,4 +239,37 @@ would reverse it. Never rewrite an entry; supersede it with a new one.
   than by the code under test is not a test.
 - **Reversed by:** nothing; this constrains the tests, not the code they cover.
 
+## D-14: How is the settings window built, and how does its page talk to the shell?
+
+- **Decided:** Its own `BrowserWindow` loading a hand-written `src/settings.html`, with a
+  **CommonJS** preload (`src/settings-preload.cjs`) exposing six named calls through
+  `contextBridge`, under `sandbox: true` + `contextIsolation: true`.
+- **Because:** the harness GUI belongs to the harness, so the shell must not inject a form into it;
+  and this project has no bundler, so a hand-written page is the same shape `loading.html` already
+  uses. The preload is CommonJS rather than ESM because a sandboxed preload is loaded as a classic
+  script — and that was an **assumption, so it was probed rather than trusted**: on load the shell
+  evaluates `typeof window.dshSettings` and logs the answer. Measured: `settings bridge: object`.
+  The IPC surface names *operations*, never paths or commands; the only path-like argument is one of
+  two fixed directory keys, and the settings object is rebuilt through `normalizeConfig` on the main
+  side, so a compromised page cannot write anything the schema would not accept.
+- **Rejected:** (1) a settings form inside the GUI — it would mean injecting into a page the harness
+  owns; (2) `sandbox: false` with an ESM preload — a weaker sandbox for no gain, when the plain CJS
+  preload works; (3) a generic "send this to main" channel — it would move the validation boundary
+  into the renderer.
+- **Reversed by:** an Electron release making sandboxed CJS preloads unavailable, which would force
+  the `sandbox: false` branch. The probe that logs `settings bridge: …` is what would catch it.
+
+## D-15: What does saving an empty settings field mean?
+
+- **Decided:** "Leave it alone." An `undefined` field is dropped from the patch before validation;
+  clearing a box does not reset that setting, and **Restore defaults** is the explicit way to do that.
+- **Because:** the form cannot distinguish a box the user cleared from one it never populated, and
+  the destructive reading is the one that silently changes a setting the user did not touch. Measured
+  round trip: `save({})` re-normalised the current settings, reported `problems: 0`, and left
+  `config.json` semantically identical.
+- **Rejected:** treating empty as "fall back to the default" — that turns a mis-click into a lost
+  setting that is not visible in the form afterwards.
+- **Reversed by:** a form that can tell "cleared" from "absent", e.g. by always populating every box.
+
+
 

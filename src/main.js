@@ -14,12 +14,12 @@
  * @module dsh-desktop/main
  */
 
-import { app, BrowserWindow, Menu, Tray, clipboard, dialog, nativeImage, screen, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, screen, shell } from 'electron';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizeConfig } from './config.mjs';
+import { DEFAULT_CONFIG, normalizeConfig } from './config.mjs';
 import { chooseGeometry } from './geometry.mjs';
 import { HarnessSupervisor } from './harness.mjs';
 import { resolveDshHome, resolveInstallAnchor, resolveNodeExe, workspaceFromArgv } from './paths.mjs';
@@ -57,6 +57,10 @@ let currentUrl = null;
 let harnessPageLoaded = false;
 let pendingStatus = null;
 let quitting = false;
+/** The settings window, when one is open. */
+let settingsWin = null;
+/** The DSH version this shell actually booted, for the settings window. */
+let dshVersion = 'not found';
 
 // ---------------------------------------------------------------------------
 // Logging. One file per run, under userData; the last ten are kept.
@@ -507,6 +511,9 @@ function createWindow() {
   });
   win.on('closed', () => {
     win = null;
+    // The settings window would otherwise keep the app alive after its own
+    // window is gone, because `window-all-closed` does not fire while it is open.
+    if (settingsWin !== null && !settingsWin.isDestroyed()) settingsWin.close();
   });
   win.on('resize', saveWindowGeometrySoon);
   win.on('move', saveWindowGeometrySoon);
@@ -607,6 +614,7 @@ function buildMenu() {
       label: 'File',
       submenu: [
         { label: 'Open Folder…', accelerator: 'CmdOrCtrl+O', click: () => void chooseWorkspace() },
+        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => void openSettingsWindow() },
         { type: 'separator' },
         {
           label: 'Copy GUI URL',
@@ -695,6 +703,156 @@ function buildTray() {
   }
 }
 
+/**
+ * Open (or re-focus) the settings window.
+ *
+ * Its own window rather than a form inside the GUI: the GUI belongs to the
+ * harness, and this shell must never inject anything into it.
+ *
+ * @returns the settings window.
+ */
+function openSettingsWindow() {
+  if (settingsWin !== null && !settingsWin.isDestroyed()) {
+    settingsWin.show();
+    settingsWin.focus();
+    return settingsWin;
+  }
+  settingsWin = new BrowserWindow({
+    width: 640,
+    height: 760,
+    minWidth: 520,
+    minHeight: 480,
+    show: false,
+    title: `${APP_NAME} — Settings`,
+    parent: win ?? undefined,
+    backgroundColor: '#101418',
+    icon: existsSync(ICON_PNG) ? ICON_PNG : undefined,
+    webPreferences: {
+      // `sandbox: true` with a CommonJS preload. The bridge is probed and logged
+      // on load, because that combination is the one assumption this window was
+      // built on and it is cheap to falsify.
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: join(HERE, 'settings-preload.cjs'),
+    },
+  });
+  settingsWin.once('ready-to-show', () => settingsWin?.show());
+  settingsWin.on('closed', () => {
+    settingsWin = null;
+  });
+  settingsWin.webContents.once('did-finish-load', () => {
+    settingsWin?.webContents
+      .executeJavaScript('typeof window.dshSettings', true)
+      .then((kind) => log(`settings bridge: ${String(kind)}`))
+      .catch((error) => log(`could not inspect the settings bridge: ${error.message}`));
+    if (process.env.DSH_DESKTOP_DIAG === '1') {
+      // Exercises the whole path — renderer → main → renderer — without changing
+      // anything: an empty patch re-normalises the current settings and saves
+      // them back unchanged. Gated on the same flag as the connectivity probe.
+      settingsWin?.webContents
+        .executeJavaScript(
+          `(async () => {
+             const before = await window.dshSettings.read();
+             const after = await window.dshSettings.save({});
+             const shown = {};
+             for (const name of ['port', 'bootTimeoutMs', 'restartLimit', 'restartWindowMs', 'graceMs']) {
+               shown[name] = Number(document.getElementById(name).value);
+             }
+             const bound = Object.entries(shown).every(([name, value]) => value === before.config[name]);
+             return JSON.stringify({
+               workspace: before.workspace,
+               versionKeys: Object.keys(before.versions).length,
+               problems: after.problems.length,
+               samePort: after.config.port === before.config.port,
+               formBoundToConfig: bound,
+             });
+           })()`,
+          true,
+        )
+        .then((summary) => log(`DIAG settings round trip: ${String(summary)}`))
+        .catch((error) => log(`DIAG settings round trip failed: ${error.message}`));
+    }
+  });
+  settingsWin
+    .loadFile(join(HERE, 'settings.html'))
+    .catch((error) => log(`could not load the settings page: ${error.message}`));
+  log('settings window opened');
+  return settingsWin;
+}
+
+/**
+ * Register the settings window's IPC.
+ *
+ * The renderer names an operation; it never supplies a path or a command. The
+ * two directory keys are an allowlist, and the settings object is rebuilt
+ * through `normalizeConfig` on this side, so a compromised page cannot write
+ * anything the schema would not accept.
+ *
+ * @returns nothing.
+ */
+function registerSettingsIpc() {
+  ipcMain.handle('settings:read', () => ({
+    config: { ...config },
+    defaults: { ...DEFAULT_CONFIG },
+    workspace,
+    paths: { data: USER_DATA, logs: LOG_DIR },
+    versions: {
+      app: app.getVersion(),
+      electron: process.versions.electron,
+      node: process.versions.node,
+      dsh: dshVersion,
+    },
+  }));
+
+  ipcMain.handle('settings:save', (_event, values) => {
+    const given = values !== null && typeof values === 'object' && !Array.isArray(values) ? values : {};
+    // An empty field means "leave it alone", not "reset it": the form cannot
+    // know the difference between a cleared box and a value it never showed.
+    const patch = Object.fromEntries(Object.entries(given).filter(([, value]) => value !== undefined));
+    const problems = [];
+    const next = normalizeConfig({ ...config, ...patch }, (problem) => problems.push(problem));
+    writeJson(CONFIG_PATH, next);
+    // The supervisor holds this same object, so replacing its fields is what
+    // makes restart policy and grace-period changes take effect immediately.
+    Object.assign(config, next);
+    log(`settings saved: ${JSON.stringify(next)}${problems.length > 0 ? ` (refused: ${problems.join('; ')})` : ''}`);
+    return { config: next, problems };
+  });
+
+  ipcMain.handle('settings:choose-workspace', async () => {
+    const parent = settingsWin ?? win;
+    if (parent === null || parent.isDestroyed()) return null;
+    const result = await dialog.showOpenDialog(parent, {
+      title: 'Choose the workspace for DSH Desktop',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    await switchWorkspace(result.filePaths[0]);
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle('settings:restart-harness', async () => {
+    if (supervisor !== null) await supervisor.restartWith(workspace);
+    return true;
+  });
+
+  ipcMain.handle('settings:open-path', (_event, which) => {
+    const target = which === 'logs' ? LOG_DIR : which === 'data' ? USER_DATA : null;
+    if (target === null) {
+      log(`refused to open an unknown path key: ${JSON.stringify(which)}`);
+      return false;
+    }
+    void shell.openPath(target);
+    return true;
+  });
+
+  ipcMain.handle('settings:close', () => {
+    settingsWin?.close();
+    return true;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Startup and shutdown
 // ---------------------------------------------------------------------------
@@ -740,6 +898,8 @@ if (!app.requestSingleInstanceLock()) {
     createWindow();
     buildMenu();
     buildTray();
+    registerSettingsIpc();
+    if (process.argv.includes('--settings')) openSettingsWindow();
 
     // Reap a child left behind by a previous run before starting a new one, so
     // a hard-killed shell cannot leave two harnesses holding one profile. A
@@ -759,6 +919,7 @@ if (!app.requestSingleInstanceLock()) {
       log(`DSH_HOME: ${dshHome}`);
       nodeExe = resolveNodeExe();
       anchor = resolveInstallAnchor(dshHome);
+      dshVersion = anchor.version;
       log(`node: ${nodeExe}`);
       log(`dsh: ${anchor.version} at ${anchor.dir}`);
     } catch (error) {

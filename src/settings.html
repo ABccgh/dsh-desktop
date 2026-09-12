@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>DSH Desktop — Settings</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 1.25rem 1.5rem 2rem;
+        background: #101418; color: #e6e9ef;
+        font: 13px/1.55 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+      h1 { font-size: 1.05rem; margin: 0 0 1rem; }
+      h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .06em;
+           color: #8b95a5; margin: 1.4rem 0 .5rem; font-weight: 600; }
+      .row { display: grid; grid-template-columns: 15rem 1fr; gap: .5rem .75rem; align-items: center; }
+      label { color: #c3cad6; }
+      input[type=number], input[type=text] {
+        width: 100%; padding: .35rem .5rem; background: #171c22; color: #e6e9ef;
+        border: 1px solid #2c333d; border-radius: 5px; font: inherit;
+      }
+      input:focus { outline: 1px solid #5b9dff; border-color: #5b9dff; }
+      .hint { grid-column: 2; color: #6b7482; font-size: 12px; margin: -.25rem 0 .25rem; }
+      .value { color: #e6e9ef; overflow-wrap: anywhere; }
+      button {
+        font: inherit; padding: .35rem .7rem; margin-right: .4rem;
+        background: #1c232b; color: #e6e9ef; border: 1px solid #2c333d; border-radius: 5px;
+      }
+      button:hover { border-color: #3d4753; }
+      button.primary { background: #24507f; border-color: #2f6fb0; }
+      footer { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #222932;
+               display: flex; align-items: center; gap: .5rem; }
+      #status { color: #7fc08a; }
+      #status.error { color: #ff8b8b; }
+      .check { display: flex; align-items: center; gap: .5rem; }
+    </style>
+  </head>
+  <body>
+    <h1>DSH Desktop — Settings</h1>
+
+    <h2>Workspace</h2>
+    <div class="row">
+      <span>Current</span>
+      <span class="value" id="workspace">…</span>
+      <span></span>
+      <span><button id="choose">Choose folder…</button><span class="hint" style="display:inline">applies immediately, restarting the harness</span></span>
+    </div>
+
+    <h2>Harness</h2>
+    <div class="row">
+      <label for="port">Port</label>
+      <input id="port" type="number" min="0" max="65535" />
+      <span class="hint">0 lets the OS choose a free one; a fixed port can collide with your own `dsh web`</span>
+
+      <label for="bootTimeoutMs">Boot timeout (ms)</label>
+      <input id="bootTimeoutMs" type="number" min="30000" />
+      <span class="hint">how long to wait for the harness to report its URL</span>
+
+      <label for="restartLimit">Restart limit</label>
+      <input id="restartLimit" type="number" min="0" max="100" />
+      <span class="hint">unexpected exits tolerated before the shell stops restarting</span>
+
+      <label for="restartWindowMs">Restart window (ms)</label>
+      <input id="restartWindowMs" type="number" min="1000" />
+
+      <label for="graceMs">Shutdown grace (ms)</label>
+      <input id="graceMs" type="number" min="0" max="120000" />
+      <span class="hint">how long a quit waits for the child to die before giving up on confirming it</span>
+    </div>
+
+    <h2>Behaviour</h2>
+    <div class="row">
+      <span>Closing the window</span>
+      <span class="check"><input id="closeToTray" type="checkbox" /><label for="closeToTray">hide to the tray instead of quitting</label></span>
+    </div>
+
+    <h2>About</h2>
+    <div class="row">
+      <span>Versions</span><span class="value" id="versions">…</span>
+      <span>Data folder</span><span><button id="open-data">Open</button><span class="value" id="data-path"></span></span>
+      <span>Logs</span><span><button id="open-logs">Open</button></span>
+    </div>
+
+    <footer>
+      <button id="save" class="primary">Save</button>
+      <button id="restart">Restart harness</button>
+      <button id="defaults">Restore defaults</button>
+      <span id="status"></span>
+    </footer>
+
+    <script>
+      const fields = ['port', 'bootTimeoutMs', 'restartLimit', 'restartWindowMs', 'graceMs'];
+      const status = document.getElementById('status');
+      let defaults = null;
+
+      function say(text, isError) {
+        status.textContent = text;
+        status.classList.toggle('error', Boolean(isError));
+      }
+
+      function fill(config) {
+        for (const name of fields) document.getElementById(name).value = config[name];
+        document.getElementById('closeToTray').checked = config.closeToTray === true;
+      }
+
+      function collect() {
+        const values = { closeToTray: document.getElementById('closeToTray').checked };
+        for (const name of fields) {
+          const raw = document.getElementById(name).value.trim();
+          values[name] = raw === '' ? undefined : Number(raw);
+        }
+        return values;
+      }
+
+      async function load() {
+        const state = await window.dshSettings.read();
+        defaults = state.defaults;
+        fill(state.config);
+        document.getElementById('workspace').textContent = state.workspace;
+        document.getElementById('data-path').textContent = ' ' + state.paths.data;
+        document.getElementById('versions').textContent =
+          'DSH Desktop ' + state.versions.app + ' · Electron ' + state.versions.electron +
+          ' · Node ' + state.versions.node + ' · DSH ' + state.versions.dsh;
+      }
+
+      document.getElementById('save').addEventListener('click', async () => {
+        const result = await window.dshSettings.save(collect());
+        if (result.problems.length > 0) {
+          say('Saved, but these were refused: ' + result.problems.join('; '), true);
+          fill(result.config);
+        } else {
+          say('Saved.');
+        }
+      });
+
+      document.getElementById('defaults').addEventListener('click', () => {
+        if (defaults) { fill(defaults); say('Defaults loaded — press Save to keep them.'); }
+      });
+
+      document.getElementById('choose').addEventListener('click', async () => {
+        const chosen = await window.dshSettings.chooseWorkspace();
+        if (chosen) { document.getElementById('workspace').textContent = chosen; say('Restarting in ' + chosen + '…'); }
+      });
+
+      document.getElementById('restart').addEventListener('click', async () => {
+        say('Restarting…');
+        await window.dshSettings.restartHarness();
+        say('Restarted.');
+      });
+
+      document.getElementById('open-logs').addEventListener('click', () => window.dshSettings.openPath('logs'));
+      document.getElementById('open-data').addEventListener('click', () => window.dshSettings.openPath('data'));
+
+      load().catch((error) => say('Could not load settings: ' + error.message, true));
+    </script>
+  </body>
+</html>
