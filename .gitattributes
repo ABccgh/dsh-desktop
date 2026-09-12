@@ -1,0 +1,12 @@
+# Pin line endings. This machine's git defaults to autocrlf=true, which would
+# store LF files with CRLF in the object database and hand back CRLF on checkout.
+# The DSH repositories on this machine pin LF for the same reason: their push
+# tooling uploads blobs read straight out of git, so the stored bytes are what
+# ends up on the remote.
+* text=auto eol=lf
+
+# Assets that must never be translated.
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary
