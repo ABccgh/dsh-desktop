@@ -28,7 +28,9 @@ your sessions are exactly the ones you already have. Nothing is copied, and noth
 - Tray icon and application menu; external links open in your real browser; a folder picker for the
   workspace; optional close-to-tray.
 - A **settings window** (`File → Settings…`) with a live view of the resolved Node, harness and log
-  paths, and per-field validation — an empty field means "use the default" rather than zero.
+  paths, and per-field validation. Clearing a field leaves that setting alone rather than resetting
+  it — the form cannot tell a box you emptied from one it never filled, so **Restore defaults** is
+  the explicit way to undo (D-15).
 - A **global hotkey** (default `Control+Alt+D`) and a **taskbar jump list** listing the workspaces you
   have opened, so a project is one right-click away.
 - A **diagnostics bundle** (`Help → Export Diagnostics…`) — versions, resolved paths, window and
@@ -62,14 +64,15 @@ To pin a shortcut to one project:
 pwsh -NoProfile -File bin/shortcut.ps1 -Name 'DSH Desktop - Atlas' -Workspace D:\atlas
 ```
 
-Requirements: Windows 10/11 and **Node.js 22 or later on `PATH`** — the harness runs on your Node,
-not on Electron's bundled one, by design (see `docs/agent-notes/DECISIONS.md` D-1).
+Requirements: Windows 10/11 and **Node.js on `PATH`** — 26.8.1 is what this was built and measured
+against, and the harness runs on that Node, not on Electron's bundled one (see
+`docs/agent-notes/DECISIONS.md` D-1).
 
 ## Development
 
 ```powershell
 npm start                        # run from source
-npm test                         # 79 assertions over the pure modules, ~0.3 s
+npm test                         # 79 tests over the pure modules, ~0.3 s
 npm run smoke                    # the acceptance ladder against the packaged build
 npm start -- "D:\some\project"   # start with that folder as the workspace
 npm start -- --settings          # open with the settings window showing
@@ -105,10 +108,15 @@ turned out to be wrong.
 
 ## Status
 
-Working and verified on Windows 10/11 with DSH 0.1.5-rc.1, Node 26.8.1 and Electron 44.3.0. Two
-things are deliberately unfinished and are recorded rather than hidden: there is **one window and one
-workspace at a time** (multiple windows are designed but not built), and the `electron-builder` NSIS
-installer target is **configured but never built** — `bin/pack.mjs` is the supported path.
+Working and verified on Windows 10/11 with DSH 0.1.5-rc.1, Node 26.8.1 and Electron 44.3.0. Three
+things are deliberately unfinished and are recorded rather than hidden:
+
+- **One window and one workspace at a time.** Multiple windows are neither designed nor built. The
+  settings form still offers **Workspace windows**, and nothing reads it — the field is a placeholder
+  for that work, not a working control.
+- **The `electron-builder` NSIS installer target is configured but has never been built.**
+  `bin/pack.mjs` is the supported path.
+- **The exe is unsigned**, so Windows shows SmartScreen's first-run warning.
 
 ## License
 

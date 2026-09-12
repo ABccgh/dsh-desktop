@@ -103,7 +103,7 @@ Electron 44.3.0.
 | `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) |
 | `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
 | `electron-builder.yml` | The NSIS installer target — **configured, never built** |
-| `test/*.test.mjs` | 79 assertions over the pure modules (`npm test`, ~0.3 s) |
+| `test/*.test.mjs` | 79 tests over the pure modules (`npm test`, ~0.3 s) |
 
 ## Current state
 
@@ -136,11 +136,17 @@ user's own `dsh web` on 3080 was process-identical (`9420`) before and after eve
 - **The NSIS installer target is configured and has never been built.** `electron-builder.yml` and
   `npm run installer` exist; no run of either has been recorded, so the toolchain and the artifact
   are both unproven. `bin/pack.mjs` is the supported path, and the README says so.
-- **One window and one workspace, still.** M3 (multiple windows) is designed but not started; see
-  `BOARD.md`. The single `win` variable is referenced 113 times in `src/main.js`, which is the size
-  of that change rather than a measure of its difficulty. The session write lease is a kernel lock
-  and the credential file is replaced atomically, but shared `storage` JSON is last-writer-wins with
-  no cross-process check — unmeasured for two windows on one profile.
+- **One window and one workspace, still.** M3 (multiple windows) is **neither designed nor started**
+  — the only artefact is a size estimate, not a design; see `BOARD.md`. The single `win` variable is
+  referenced 113 times in `src/main.js`, which is the size of that change rather than a measure of
+  its difficulty. The session write lease is a kernel lock and the credential file is replaced
+  atomically, but shared `storage` JSON is last-writer-wins with no cross-process check — unmeasured
+  for two windows on one profile.
+- **`maxWindows` is a control that does nothing.** `src/config.mjs:35` defaults it to 4, `:75`
+  validates it over 1–8, and `src/settings.html:75-76,106` renders it as **Workspace windows** — but
+  nothing reads it: no file outside `config.mjs` and `settings.html` mentions the key. It is a
+  placeholder for M3 that is visible to the user, which is worse than an internal one. Either wire it
+  up with M3 or remove it from the form.
 - **A workspace change restarts the harness.** The child's cwd is the workspace root and cannot be
   changed in place, so `File → Open Folder…` stops and starts the child; an in-flight turn is lost.
 - **`graceMs` is honest but unused for shutdown semantics.** Because Windows cannot signal the child,
@@ -172,7 +178,8 @@ evidence, because two of them contradict advice that was given to this project b
   with no probe, so `npm test` ran a real PowerShell query and would have run `taskkill /PID /T /F`
   against whatever held the fixture's pid. It passed only because that pid was gone. The suite now
   runs 72 assertions in **0.3 s**; the old run cost **534 ms**, and the difference is the proof.
-  *(79 assertions as of M4, still ~0.3 s.)*
+  *(The runner counts tests, not assertions: 79 of them as of M4, still ~0.3 s. "Assertions" is this
+  file's older word for the same measurement.)*
 - **Two reviewer findings were refuted by measurement, and are recorded so they are not re-chased:**
   the `console-message` handler is *not* broken on Electron 44 — the log contains real lines like
   `[page:warning] [connection] connection lost, retry #3 (…)`, so `event.message` and `event.level`
@@ -204,10 +211,10 @@ intent.
 
 | Item | Evidence |
 | --- | --- |
-| Sandboxed preload works | The page logged `settings bridge: object` — this was the milestone's one stated assumption, probed before anything was built on it |
-| Settings round-trip | Seven IPC calls over `contextBridge` — six `settings:*` plus `diagnostics:export`; an empty field falls back to the default rather than to zero (D-15) |
-| Hotkey | `global hotkey registered: Control+Alt+D`; an accelerator another program owns logs a refusal instead of failing startup |
-| Jump list | `jump list: ok (1 tasks)` — `setJumpList` **returns** its result, so the return value is logged rather than assumed |
+| Sandboxed preload works | The page logged `settings bridge: object` — the milestone's one stated assumption, probed before anything was built on it. **Read it for exactly what it is:** `typeof window.dshSettings` proves the preload executed and the bridge exists, not that any of the seven calls answers. The seven `ipcMain.handle` names are a registration, not a probe; exercise the form by hand after any change to the IPC surface |
+| Settings round-trip | Seven IPC calls over `contextBridge` — six `settings:*` plus `diagnostics:export`. An empty field means **leave that setting alone**, not "fall back to the default": `undefined` values are dropped before `normalizeConfig` (`src/main.js:879-885`), which is D-15's decided branch — quoting the default here would have stated the branch D-15 rejects |
+| Global hotkey | `global hotkey registered: Control+Alt+D`; an accelerator another program owns logs a refusal instead of failing startup |
+| Jump list | `jump list: ok (1 tasks)` on the first run and `ok (2 tasks)` once a workspace was seeded — `setJumpList` **returns** its result, so the return value is logged rather than assumed. The first-run count is the pinned entry alone, so it proves the call answered rather than that a workspace entry was present |
 | DSH version change | Logged when `lastDshVersion` differs, and recorded in `state.json` |
 | Diagnostics export | 7785 bytes, all six sections, **0 token leaks** — written by the same function the Help menu calls |
 | Exe icon and version | `exe ProductName reads back as "DSH Desktop"`, read back with rcedit's own getter |

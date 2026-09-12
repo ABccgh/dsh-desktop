@@ -61,7 +61,7 @@ whose rule 7 is "this repo ships presets and nothing else". Do not move it in.
 ## Commands
 
 ```powershell
-npm test            # node --test test/ — 79 assertions, ~0.3 s, no real process touched
+npm test            # node --test test/ — 79 tests, ~0.3 s, no real process touched
 npm start           # electron .  (add -- "D:\some\project" to choose the workspace)
 npm run icon        # build/icon.png + build/icon.ico
 npm run pack        # dist\DSH Desktop\DSH Desktop.exe — portable, no extra toolchain

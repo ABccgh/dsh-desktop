@@ -315,5 +315,52 @@ would reverse it. Never rewrite an entry; supersede it with a new one.
   setting that is not visible in the form afterwards.
 - **Reversed by:** a form that can tell "cleared" from "absent", e.g. by always populating every box.
 
+## D-19: How is this repository published, when `git` cannot reach GitHub from this machine?
+
+- **Decided:** create `ABccgh/dsh-desktop` **public** with `auto_init: true` via `POST /user/repos`,
+  then push with `D:\DeepSeek Harness\bin\push-api-ref.ps1 -RemoteRepo dsh-desktop -Force` — using a
+  **temporary copy** of that script with exactly one line corrected. `docs/agent-notes/` ships; it
+  contains machine paths and candid commentary, and the user was told so before the push.
+- **Because:** `git push` and `git clone` both fail at the TLS layer here
+  (`CRYPT_E_NO_REVOCATION_CHECK`), while the HTTPS API works. The script reproduces a push over REST
+  and verifies every object id it sends against `git`'s own value, ending with
+  `remote tree == git rev-parse HEAD^{tree}` — which is the check that matters, because four earlier
+  versions of that script wrote a *plausible-looking* body that was wrong.
+- **The one-line correction, and why it is a defect in the source repo and not a preference:**
+  `bf4c2ad` ("stop treating a first-parent miss as proof of divergence") rewrote
+  `if (-not $remoteContainsLocalTip) { if (-not $Force) { throw … } }` into
+  `if ($chain.Contains($localTip)) { … } else { if (-not $AllowUnrelated) { throw … } }`. The throw
+  moved out of its `-Force` guard and `-Force` was not added to the condition, so **the flag the
+  message tells you to pass no longer gets you past the message**. Measured, not inferred: `-Force`
+  alone threw at `push-api-ref.ps1:258`, `-Force -AllowUnrelated` threw at `:275`
+  (`remote history does not contain -RemoteBase `, empty) because `-AllowUnrelated` also disables the
+  force branch at `:264`, and `-RemoteOnlyParent` needs a `-Base` it cannot use here. The correction
+  restores the pre-`bf4c2ad` behaviour: `if (-not $AllowUnrelated -and -not $Force) {`.
+  `D:\DeepSeek Harness` was **not** modified; the copy lives in `%TEMP%` and its diff against the
+  original is that single line.
+- **Rejected:** (1) editing the borrowed script in place — it is tracked content of another project
+  with its own pack check; (2) a Contents-API bootstrap pushed with `-Force`, which leaves the
+  bootstrap commit as the published history's ancestor; (3) `-RemoteOnlyParent`, which parents the
+  first uploaded commit at the remote tip and therefore **drops this repository's root commit** —
+  its range can never include a root by construction; (4) deleting `refs/heads/main` to re-enter
+  `-Init`, which cannot work either: the script refuses that path outright at `:204`, and an
+  unreferenced repository rejects `POST /git/blobs` with `409` (D-33).
+- **Measured outcome:** all six commits round-tripped **SHA-identical** (`61ea7e4` … `42b8c99`);
+  remote tree `5ed3d754bbc3d0856cbbc61bb1b237b591935a52` equals the local `HEAD^{tree}`; the pushed
+  root has **0 parents**, so the `auto_init` commit is not in the ancestry. Local `git remote -v`
+  stayed empty — the token was only ever `$env:GH_TOKEN` inside one process, never in a URL, a file,
+  or a commit.
+- **Reversed by:** fixing the guard in `D:\DeepSeek Harness\bin\push-api-ref.ps1`; after that the
+  temporary copy should be deleted and the script used as it ships.
+
+## D-20: Is D-14's "six named calls" still the count?
+
+- **Decided:** no — **seven**. `src/settings-preload.cjs:18-33` exposes `read`, `save`,
+  `chooseWorkspace`, `restartHarness`, `openPath`, `close` and `exportDiagnostics`; the seventh
+  arrived with M4's diagnostics bundle. D-14 is append-only and was right on its date, so this entry
+  supersedes the count rather than editing it.
+- **Because:** a reader who trusts "six" looks for a missing call instead of a stale sentence.
+- **Reversed by:** nothing; it is a count.
+
 
 

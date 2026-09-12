@@ -16,8 +16,16 @@ verified; M3 is not started and the NSIS installer half of M5 has never been run
 | **M4** CLI, hotkey, jump list, DSH version change, diagnostics export | **done, verified** |
 | **M5** exe icon + version | **done, verified** (`exe ProductName reads back as "DSH Desktop"`) |
 | **M5** NSIS installer | **config written, NEVER RUN** — `npm run installer` exists but has not been executed, so the NSIS toolchain and the produced installer are both unproven |
-| **M3** multi-window | **NOT STARTED** — the largest item (973 lines, 113 references to one `win`); see below |
+| **M3** multi-window | **NOT STARTED, NOT DESIGNED** — the largest item (973 lines, 113 references to one `win`); see below |
 | **M6 (rest)** docs for M3/M5 | not started |
+| **Publish** this repository to GitHub | **done** — `github.com/ABccgh/dsh-desktop`, `main` at `42b8c99`, remote tree equal to the local `HEAD^{tree}`; see D-19 |
+
+## Open gap found while publishing
+
+`maxWindows` is visible in the settings form (**Workspace windows**) and read by nothing:
+`src/config.mjs:35,75` default and validate it, `src/settings.html:75-76,106` renders it, and no
+other file mentions the key. It is M3's placeholder leaking into the UI. Wire it up or hide it — a
+control that silently does nothing is worse than an absent one.
 
 ## M4 and M5, as verified
 
@@ -82,9 +90,12 @@ re-measured.
 
 ## Next
 
-1. M2: the settings window (`src/settings.html` + CJS preload + `contextBridge`). Its first step is
-   the one-line probe the plan records as an assumption: log `typeof window.dshSettings` from the
-   page, because a CJS preload under `sandbox: true` has not been verified on this build.
-2. Then M3, which extends `state.json` from one child record to many — the shape M1 just defined.
-3. `git push` does not work on this machine's network; the two-step route in
-   `D:\DeepSeek Harness\AGENTS.md` applies. This repository has local commits only.
+1. **M3, the only milestone left** — multiple windows. Its first step is a design, not code: nothing
+   in this tree describes the shape. Then `state.json` moves from one child record to many, which is
+   the shape M1 defined.
+2. **The `maxWindows` control**, with M3 or before it — see the gap above.
+3. **The NSIS installer**, if a real installer is wanted: `npm run installer` has still never been
+   executed, so nothing about that toolchain is known.
+4. **A design question M3 forces:** A5 is fixed but unreachable while one window exists, and
+   `did-finish-load` on Chromium's own error page is still unanswered (open question 2 above). Both
+   become live the moment a window can be reopened.
