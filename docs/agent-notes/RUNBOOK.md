@@ -36,10 +36,24 @@ node --test --test-name-pattern 'reaped' test/   # one test by name
 ```powershell
 npm start                       # electron .
 npm start -- "D:\some\project"  # start with that directory as the workspace
+npm start -- --settings         # open with the settings window (no mouse needed)
 ```
 
 Logs: `%APPDATA%\DSH Desktop\logs\app-<timestamp>.log` (child stdout/stderr included, prefixed
 `[child]`). Settings: `%APPDATA%\DSH Desktop\config.json`. State: `state.json` in the same directory.
+Timestamps are local with a UTC offset, so the file name agrees with the file's own modification time.
+
+## Verify end to end
+
+```powershell
+npm run smoke         # the packaged build: 12 checks, exit code 0 when all pass
+npm run smoke:dev     # the same ladder against `electron .`
+```
+
+The ladder is: readiness captured → the port is real and not 3080 → the interface mounted → no token
+in the log → exactly one harness child on the right argv and port → an unauthenticated root request
+is refused → the user's own GUI is untouched → quitting reaps the child and clears its record.
+It leaves the app running if it fails, deliberately, so the state can be inspected.
 
 ## Build and install
 

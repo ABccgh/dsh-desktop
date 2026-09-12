@@ -10,6 +10,8 @@
     "postinstall": "node node_modules/electron/install.js",
     "start": "electron .",
     "test": "node --test test/",
+    "smoke": "node bin/smoke.mjs",
+    "smoke:dev": "node bin/smoke.mjs --dev",
     "icon": "electron tools/make-icon.mjs",
     "pack": "node bin/pack.mjs",
     "shortcut": "pwsh -NoProfile -File bin/shortcut.ps1"

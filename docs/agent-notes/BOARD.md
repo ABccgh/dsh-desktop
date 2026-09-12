@@ -10,12 +10,13 @@ committed; M2–M6 are not started.**
 
 | Milestone | State |
 | --- | --- |
-| **M1** defects A1–A14, test hardening, `geometry`/`state` extracted | **done, verified** |
-| **M2** settings window | not started |
-| **M3** multi-window + tray/jump list | not started |
-| **M4** hotkey, DSH version change, diagnostics export, CLI | not started |
-| **M5** rcedit exe icon + NSIS installer | not started |
-| **M6** `bin/smoke.mjs` + docs | not started |
+| **M1** defects A1–A14, test hardening, `geometry`/`state` extracted | **done, verified, committed `402d2e3`** |
+| **M2** settings window (F1) | **done, verified, committed `c339dbd`** |
+| **M6 (part)** `bin/smoke.mjs` — the acceptance ladder as one command | **done, 12/12 checks pass** |
+| **M3** multi-window + tray/jump list (F2, F3) | not started |
+| **M4** hotkey, DSH version change, diagnostics export, CLI (F4–F7) | not started (`--settings` shipped with M2) |
+| **M5** rcedit exe icon + NSIS installer (D) | not started |
+| **M6 (rest)** docs, and the memory layers for M3–M5 | not started |
 
 ## What M1 changed, and how each was proved
 
