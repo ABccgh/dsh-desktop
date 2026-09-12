@@ -5,8 +5,8 @@
 **DSH Desktop** at `D:\dsh-desktop` — a Windows desktop shell for DeepSeek Harness: one window
 showing the user's own GUI, no browser chrome, no terminal, no server to start by hand.
 
-The current work is the approved six-milestone improvement plan. **M1 is complete, verified and
-committed; M2–M6 are not started.**
+The current work is the approved six-milestone improvement plan. **M1, M2, M4 and M5 are complete and
+verified; M3 is not started and the NSIS installer half of M5 has never been run.**
 
 | Milestone | State |
 | --- | --- |

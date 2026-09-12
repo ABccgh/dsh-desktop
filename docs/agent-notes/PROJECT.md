@@ -84,22 +84,26 @@ Electron 44.3.0.
 
 | Path | Responsibility |
 | --- | --- |
-| `src/main.js` | Electron main: window, menu, tray, lifecycle, page-mount diagnostic, own state |
+| `src/main.js` | Electron main: window, menu, tray, lifecycle, CLI switches, hotkey, jump list, page-mount diagnostic, own state |
 | `src/harness.mjs` | The child: spawn, env hygiene, readiness, restart policy, tree kill, `restartWith` |
 | `src/reap.mjs` | Identity-checked termination of a child left by a previous run |
-| `src/url-line.mjs` | The readiness-line contract, the chunk-reassembling scanner, token redaction |
+| `src/url-line.mjs` | The readiness-line contract, the chunk-reassembling scanner, both token redactors |
 | `src/args.mjs` | The child's argv — asserted exactly by a test |
 | `src/config.mjs` | Settings defaults and per-field validation |
 | `src/geometry.mjs` | Where the window goes next launch — pure, so the off-screen branch is testable |
 | `src/state.mjs` | Making `state.json` safe to read; object-or-nothing, unknown keys preserved |
+| `src/diagnostics.mjs` | The support bundle: versions, paths, windows, config, state, log tail — redacted field by field |
 | `src/paths.mjs` | `DSH_HOME`, the installation anchor, the Node executable, the workspace in argv |
 | `src/restart-policy.mjs` | When a crash loop must stop |
 | `src/loading.html` | The pre-harness page and the failure page |
+| `src/settings.html`, `src/settings-preload.cjs` | The settings window and its bridge — sandboxed, so the preload must be CommonJS |
 | `src/icon.svg` | Not present: the mark is read from the installed DSH frontend favicon at build time |
 | `tools/make-icon.mjs` | SVG → PNG (visible offscreen window) → hand-built ICO, with payload validation |
-| `bin/pack.mjs` | Portable packaging into `dist\DSH Desktop\` |
-| `bin/shortcut.ps1` | Start Menu and Desktop shortcuts |
-| `test/*.test.mjs` | 42 assertions over the pure modules (`npm test`) |
+| `bin/pack.mjs` | Portable packaging into `dist\DSH Desktop\`, including exe icon and version via rcedit's binary |
+| `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) |
+| `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
+| `electron-builder.yml` | The NSIS installer target — **configured, never built** |
+| `test/*.test.mjs` | 79 assertions over the pure modules (`npm test`, ~0.3 s) |
 
 ## Current state
 
@@ -123,13 +127,22 @@ user's own `dsh web` on 3080 was process-identical (`9420`) before and after eve
 
 ## Known gaps
 
-- **The exe icon is Electron's default.** Setting it needs `rcedit`/`electron-builder`, i.e. another
-  GitHub-hosted binary; window and tray icons are ours (`build/icon.ico`, `build/icon.png`). The
-  shortcut points at our `.ico`, so Explorer shows the right icon.
+- **The exe icon and version are set, and the earlier "gap" here was wrong in an instructive way.**
+  It used to read "setting it needs `rcedit`/`electron-builder`, i.e. another GitHub-hosted binary".
+  It does need `rcedit` — and `rcedit@5.0.0` publishes `files: ["bin", "lib/index.d.ts"]`, so the
+  binary ships and the JavaScript wrapper does not. `bin/pack.mjs` calls the binary directly, with
+  the flags the binary prints for itself, and reads the result back (`ProductName` →
+  `DSH Desktop`). D-16/D-17.
+- **The NSIS installer target is configured and has never been built.** `electron-builder.yml` and
+  `npm run installer` exist; no run of either has been recorded, so the toolchain and the artifact
+  are both unproven. `bin/pack.mjs` is the supported path, and the README says so.
+- **One window and one workspace, still.** M3 (multiple windows) is designed but not started; see
+  `BOARD.md`. The single `win` variable is referenced 113 times in `src/main.js`, which is the size
+  of that change rather than a measure of its difficulty. The session write lease is a kernel lock
+  and the credential file is replaced atomically, but shared `storage` JSON is last-writer-wins with
+  no cross-process check — unmeasured for two windows on one profile.
 - **A workspace change restarts the harness.** The child's cwd is the workspace root and cannot be
   changed in place, so `File → Open Folder…` stops and starts the child; an in-flight turn is lost.
-- **Only one workspace at a time.** One window, one child. Multiple windows would need per-window
-  child ownership and is not designed.
 - **`graceMs` is honest but unused for shutdown semantics.** Because Windows cannot signal the child,
   the harness's own `SIGTERM` teardown never runs; committed session-log appends are already on disk,
   but in-flight disposal is lost. D-3 records this rather than claiming a clean shutdown.
@@ -159,6 +172,7 @@ evidence, because two of them contradict advice that was given to this project b
   with no probe, so `npm test` ran a real PowerShell query and would have run `taskkill /PID /T /F`
   against whatever held the fixture's pid. It passed only because that pid was gone. The suite now
   runs 72 assertions in **0.3 s**; the old run cost **534 ms**, and the difference is the proof.
+  *(79 assertions as of M4, still ~0.3 s.)*
 - **Two reviewer findings were refuted by measurement, and are recorded so they are not re-chased:**
   the `console-message` handler is *not* broken on Electron 44 — the log contains real lines like
   `[page:warning] [connection] connection lost, retry #3 (…)`, so `event.message` and `event.level`
@@ -182,4 +196,32 @@ evidence, because two of them contradict advice that was given to this project b
   the documented minimum was below the mean, so choosing it made every launch time out.
 - **A defect was found by testing rather than by reading**: with `closeToTray` on, a second launch
   focused a hidden window without showing it. `focus()` does nothing to a hidden window.
+
+## M2, M4, M5, measured
+
+The settings window (F1), then the shell's own desktop surfaces. Each row is an observation, not an
+intent.
+
+| Item | Evidence |
+| --- | --- |
+| Sandboxed preload works | The page logged `settings bridge: object` — this was the milestone's one stated assumption, probed before anything was built on it |
+| Settings round-trip | Seven IPC calls over `contextBridge` — six `settings:*` plus `diagnostics:export`; an empty field falls back to the default rather than to zero (D-15) |
+| Hotkey | `global hotkey registered: Control+Alt+D`; an accelerator another program owns logs a refusal instead of failing startup |
+| Jump list | `jump list: ok (1 tasks)` — `setJumpList` **returns** its result, so the return value is logged rather than assumed |
+| DSH version change | Logged when `lastDshVersion` differs, and recorded in `state.json` |
+| Diagnostics export | 7785 bytes, all six sections, **0 token leaks** — written by the same function the Help menu calls |
+| Exe icon and version | `exe ProductName reads back as "DSH Desktop"`, read back with rcedit's own getter |
+| `--version` / `--help` | Printed and exited, leaving **0 Electron processes**; they run before the single-instance lock, so they answer while another copy is running |
+| Acceptance ladder | `npm run smoke` — **12/12** on the packaged build, with the user's own 3080 GUI process-identical before and after |
+
+**The redactor needed a second, wider pass, and the narrow one hid it.** `redactToken` matched
+`token=` followed by non-space characters, which covers the readiness URL; the diagnostics bundle
+carried the same secret in **four of seven** places it appeared — a header, a JSON field, a
+`--token <value>` pair, and one bare 43-character run. `redactTokenLike` was added beside it and is
+what the bundle uses; the 64-character session hash is deliberately left alone. Re-measured: 0 leaks
+across the whole bundle. The narrow function stays because the log wants the narrow behaviour.
+
+**A shortcut that is re-created does not start from empty.** `WScript.Shell.CreateShortcut()` loads an
+existing `.lnk`, so `bin/shortcut.ps1` assigns `Arguments` unconditionally now — skipping the
+assignment when it was empty would have left a previous run's `-Workspace` silently in place.
 

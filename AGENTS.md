@@ -49,21 +49,47 @@ whose rule 7 is "this repo ships presets and nothing else". Do not move it in.
   `taskkill /PID /T /F`. The suite once called it with neither and would have tree-killed whatever
   held the pid in its fixture — it passed only because that pid happened to be gone. `npm test` must
   stay well under a second: a slow suite is the smell that something real is being spawned. D-13.
+- **The development build and the packaged build share one `userData`, and therefore one
+  single-instance lock.** `electron.exe` and `DSH Desktop.exe` both resolve to
+  `%APPDATA%\DSH Desktop`, so a packaged instance left running silently rejects every later
+  `npm start` with `another instance owns the lock; exiting` and no window. Measured: two dev
+  launches disappeared this way, and the child killed as "a stray" was the packaged instance's own
+  child, which its supervisor then correctly restarted. When a launch does nothing, list **both**
+  process names before concluding anything — and prefer `npm run smoke`, which drives a real launch
+  and fails loudly rather than quietly reusing someone else's window.
+
+## Commands
+
+```powershell
+npm test            # node --test test/ — 79 assertions, ~0.3 s, no real process touched
+npm start           # electron .  (add -- "D:\some\project" to choose the workspace)
+npm run icon        # build/icon.png + build/icon.ico
+npm run pack        # dist\DSH Desktop\DSH Desktop.exe — portable, no extra toolchain
+npm run smoke       # the acceptance ladder against the packaged build (needs pack first)
+npm run smoke:dev   # the same ladder against `electron .`
+```
+
+`npm install` installs Electron; the project's own `postinstall` then fetches and extracts its binary.
+`npm run installer` (NSIS) has never been run — see `docs/agent-notes/RUNBOOK.md` before trusting it.
 
 ## Where things are
 
 | Path | Responsibility |
 | --- | --- |
-| `src/main.js` | Electron main: window, menu, tray, lifecycle, own state under `userData` |
+| `src/main.js` | Electron main: window, menu, tray, lifecycle, CLI switches, hotkey, jump list, own state under `userData` |
 | `src/harness.mjs` | The child: spawn, readiness, restart policy, tree-kill, environment hygiene |
 | `src/reap.mjs` | Identifying and terminating a child left by a previous run; the only kill of a process we did not spawn |
-| `src/url-line.mjs` | The readiness-line contract, and the chunk-reassembling scanner |
+| `src/url-line.mjs` | The readiness-line contract, the chunk-reassembling scanner, and both token redactors |
 | `src/args.mjs` | The child's argv, in one place, asserted exactly by a test |
 | `src/config.mjs` | Settings: defaults, validation, per-field fallback |
-| `src/paths.mjs` | `DSH_HOME`, the installation anchor, and the Node executable |
+| `src/paths.mjs` | `DSH_HOME`, the installation anchor, the Node executable, and the workspace in argv |
 | `src/restart-policy.mjs` | When a crash loop must stop |
+| `src/diagnostics.mjs` | The support bundle — redacted field by field, never assembled from raw state |
 | `src/loading.html` | The pre-harness page and the failure page |
-| `bin/pack.mjs` | Portable packaging into `dist\DSH Desktop\` |
-| `bin/shortcut.ps1` | Start Menu and Desktop shortcuts |
+| `src/settings.html`, `src/settings-preload.cjs` | The settings window and its bridge; `sandbox: true` means the preload must be CommonJS |
+| `bin/pack.mjs` | Portable packaging into `dist\DSH Desktop\`; calls rcedit's **binary**, not its missing wrapper |
+| `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) |
+| `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
 | `tools/make-icon.mjs` | Icon: SVG → PNG (via an offscreen Electron window) → ICO |
+| `electron-builder.yml` | The NSIS installer target — **configured, never built**; `bin/pack.mjs` is the supported path |
 | `docs/agent-notes/**` | Project memory: runbook, chronicle, decisions, board |

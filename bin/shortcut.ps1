@@ -12,6 +12,13 @@
 .PARAMETER Name
   The shortcut's display name. Defaults to "DSH Desktop".
 
+.PARAMETER Workspace
+  Open with this folder as the harness workspace. The app takes a folder as its
+  positional argument, so the shortcut simply carries it; without this it opens
+  in whichever folder was used last. It must already exist - a shortcut pointing
+  at a folder that is not there would silently open somewhere else, which is the
+  one failure the app cannot report.
+
 .PARAMETER DesktopOnly
   Create only the Desktop shortcut.
 
@@ -21,10 +28,14 @@
 
 .EXAMPLE
   pwsh -NoProfile -File bin/shortcut.ps1
+
+.EXAMPLE
+  pwsh -NoProfile -File bin/shortcut.ps1 -Name 'DSH Desktop - Atlas' -Workspace D:\atlas
 #>
 [CmdletBinding()]
 param(
     [string]$Name = 'DSH Desktop',
+    [string]$Workspace,
     [switch]$DesktopOnly,
     [switch]$Dev
 )
@@ -39,14 +50,14 @@ $devIcon = Join-Path $root 'build\icon.ico'
 
 if (-not $Dev -and (Test-Path -LiteralPath $packagedExe)) {
     $targetPath = $packagedExe
-    $arguments = ''
+    $baseArguments = @()
     $workingDirectory = Split-Path -Parent $packagedExe
     $iconPath = if (Test-Path -LiteralPath $packagedIcon) { $packagedIcon } else { $devIcon }
     $mode = 'packaged'
 }
 elseif (Test-Path -LiteralPath $devExe) {
     $targetPath = $devExe
-    $arguments = '"{0}"' -f $root
+    $baseArguments = @('"{0}"' -f $root)
     $workingDirectory = $root
     $iconPath = $devIcon
     $mode = 'development'
@@ -55,6 +66,20 @@ else {
     Write-Error "Neither $packagedExe nor $devExe exists. Run 'npm install' (see RUNBOOK.md), then 'npm run pack'."
     exit 1
 }
+
+if ($PSBoundParameters.ContainsKey('Workspace')) {
+    if (-not (Test-Path -LiteralPath $Workspace -PathType Container)) {
+        Write-Error "-Workspace '$Workspace' is not an existing folder."
+        exit 1
+    }
+    # Absolute, because the app accepts a positional folder only when it is
+    # absolute - a relative one is ignored on purpose (src/paths.mjs).
+    $Workspace = (Resolve-Path -LiteralPath $Workspace).Path
+}
+
+$allArguments = $baseArguments
+if ($PSBoundParameters.ContainsKey('Workspace')) { $allArguments += '"{0}"' -f $Workspace }
+$arguments = $allArguments -join ' '
 
 if (-not (Test-Path -LiteralPath $iconPath)) {
     Write-Warning "No icon at $iconPath - the shortcut will use the executable's own icon. Run 'npm run icon' to create it."
@@ -77,7 +102,9 @@ foreach ($directory in $destinations) {
     $linkPath = Join-Path $directory "$Name.lnk"
     $link = $shell.CreateShortcut($linkPath)
     $link.TargetPath = $targetPath
-    if ($arguments -ne '') { $link.Arguments = $arguments }
+    # Assigned even when empty: CreateShortcut() loads an existing .lnk, so
+    # skipping the assignment would leave a previous run's -Workspace in place.
+    $link.Arguments = $arguments
     $link.WorkingDirectory = $workingDirectory
     if ($null -ne $iconPath) { $link.IconLocation = "$iconPath,0" }
     $link.Description = 'DSH Desktop - DeepSeek Harness in a desktop window'
