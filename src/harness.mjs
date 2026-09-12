@@ -93,6 +93,7 @@ export class HarnessSupervisor {
   #url = null;
   #bootTimer = null;
   #restartTimer = null;
+  #restarting = false;
 
   /**
    * @param options - everything the supervisor needs, injected so it holds no
@@ -159,7 +160,10 @@ export class HarnessSupervisor {
     this.#child = child;
     this.onStatus({ kind: 'starting', pid: child.pid });
     this.log(`child pid=${String(child.pid)}`);
-    this.onRecord({ pid: child.pid, startedAt: Date.now() });
+    // The argv is recorded, not just used: it is what the reaper matches the
+    // live process against, so the record describes the process it spawned
+    // rather than relying on a constant that a config change would invalidate.
+    this.onRecord({ pid: child.pid, startedAt: Date.now(), args: [...args] });
 
     this.#scanner = createReadyScanner({
       // Redacted: the readiness line carries the process launch token, and the
@@ -256,7 +260,14 @@ export class HarnessSupervisor {
 
   /**
    * Terminate the child and everything it spawned.
-   * @returns a promise settling once the child is gone or the grace period ends.
+   *
+   * Always settles — the grace timer is part of the race, so a child that never
+   * fires `exit` still cannot stall the caller — but it *reports* whether the
+   * process is actually gone. The caller needs that: a record cleared while the
+   * child is still alive is a record that can never be used to reap it.
+   *
+   * @returns `{ gone: boolean, status: number|null }`; `gone` is false when the
+   *   child was still running when the grace period expired.
    */
   async stop() {
     this.#stopping = true;
@@ -264,7 +275,7 @@ export class HarnessSupervisor {
     clearTimeout(this.#restartTimer);
     clearTimeout(this.#bootTimer);
     const child = this.#child;
-    if (child === null || child.pid === undefined) return;
+    if (child === null || child.pid === undefined) return { gone: true, status: null };
 
     const exited = new Promise((resolve) => child.once('exit', resolve));
     const result = killTree(child.pid);
@@ -275,7 +286,18 @@ export class HarnessSupervisor {
       this.log('stop: falling back to child.kill()');
       child.kill();
     }
-    await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, this.config.graceMs))]);
+    const outcome = await Promise.race([
+      exited.then(() => 'exited'),
+      new Promise((resolve) => setTimeout(() => resolve('timed out'), this.config.graceMs)),
+    ]);
+    if (outcome === 'timed out') {
+      this.log(
+        `stop: pid=${String(child.pid)} was still running ${this.config.graceMs} ms after the tree kill; ` +
+          `its record must be kept so the next launch can try again`,
+      );
+      return { gone: false, status: result.status };
+    }
+    return { gone: true, status: result.status };
   }
 
   /**
@@ -285,15 +307,29 @@ export class HarnessSupervisor {
    * workspace change cannot be applied to a running child — it is a restart,
    * not a setting.
    *
+   * Guarded against re-entry: two UI surfaces (the File menu and the tray) both
+   * open the folder picker, and the only other defence is `start()`'s
+   * `running` check, which is false for the whole span of a spawn.
+   *
    * @param cwd - the directory the new child runs in.
-   * @returns a promise settling once the replacement has been started.
+   * @returns a promise settling once the replacement has been started, or
+   *   immediately when a restart is already in flight.
    */
   async restartWith(cwd) {
-    await this.stop();
-    this.cwd = cwd;
-    this.#attempts = [];
-    this.#gaveUp = false;
-    this.#stopping = false;
-    this.start();
+    if (this.#restarting) {
+      this.log('restart already in flight; ignoring the second request');
+      return;
+    }
+    this.#restarting = true;
+    try {
+      await this.stop();
+      this.cwd = cwd;
+      this.#attempts = [];
+      this.#gaveUp = false;
+      this.#stopping = false;
+      this.start();
+    } finally {
+      this.#restarting = false;
+    }
   }
 }

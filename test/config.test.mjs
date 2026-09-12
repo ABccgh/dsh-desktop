@@ -50,6 +50,25 @@ test('port 0 is a valid value, not a missing one', () => {
   assert.equal(normalizeConfig({ port: 0 }).port, 0);
 });
 
+test('the boot timeout floor is above the measured boot time', () => {
+  // Measured across nine runs: 8.67–10.20 s. The old floor of 5 s sat below
+  // that, so the documented minimum made every launch time out — and the only
+  // recovery was hand-editing a file whose path the app never reveals.
+  const measuredWorstCase = 10_200;
+  assert.ok(DEFAULT_CONFIG.bootTimeoutMs > measuredWorstCase * 2, 'the default leaves real headroom');
+  assert.equal(normalizeConfig({ bootTimeoutMs: 30_000 }).bootTimeoutMs, 30_000, 'the floor itself is accepted');
+  assert.equal(
+    normalizeConfig({ bootTimeoutMs: 29_999 }, () => {}).bootTimeoutMs,
+    DEFAULT_CONFIG.bootTimeoutMs,
+    'one below the floor is refused',
+  );
+  assert.equal(
+    normalizeConfig({ bootTimeoutMs: 5_000 }, () => {}).bootTimeoutMs,
+    DEFAULT_CONFIG.bootTimeoutMs,
+    'the old floor is now refused',
+  );
+});
+
 test('each invalid value falls back to its default and says so', () => {
   const cases = [
     [{ port: 70_000 }, 'port'],

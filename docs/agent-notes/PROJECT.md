@@ -90,7 +90,9 @@ Electron 44.3.0.
 | `src/url-line.mjs` | The readiness-line contract, the chunk-reassembling scanner, token redaction |
 | `src/args.mjs` | The child's argv — asserted exactly by a test |
 | `src/config.mjs` | Settings defaults and per-field validation |
-| `src/paths.mjs` | `DSH_HOME`, the installation anchor, the Node executable |
+| `src/geometry.mjs` | Where the window goes next launch — pure, so the off-screen branch is testable |
+| `src/state.mjs` | Making `state.json` safe to read; object-or-nothing, unknown keys preserved |
+| `src/paths.mjs` | `DSH_HOME`, the installation anchor, the Node executable, the workspace in argv |
 | `src/restart-policy.mjs` | When a crash loop must stop |
 | `src/loading.html` | The pre-harness page and the failure page |
 | `src/icon.svg` | Not present: the mark is read from the installed DSH frontend favicon at build time |
@@ -143,3 +145,41 @@ user's own `dsh web` on 3080 was process-identical (`9420`) before and after eve
   future version adds one-shot state, the no-probe rule would become load-bearing rather than merely
   simpler.
 - Port numbers, PIDs, and byte sizes above are a snapshot of one session. Re-measure before quoting.
+
+## M1 hardening, measured (added after the plan's first milestone)
+
+Thirteen defects were fixed and re-measured. The decisions are D-8…D-13; what follows is the
+evidence, because two of them contradict advice that was given to this project by a reviewer.
+
+- **A `null` in `state.json` used to make the app permanently unstartable**, and the mechanism is
+  worth keeping: every key is read during module evaluation, so the process died before a window
+  existed. After the fix, with the file literally containing `null`, the packaged build logged
+  `state: state is not a JSON object (null); ignoring it` and mounted the interface.
+- **The test suite could tree-kill a real process.** `test/reap.test.mjs` called `reapStaleChild`
+  with no probe, so `npm test` ran a real PowerShell query and would have run `taskkill /PID /T /F`
+  against whatever held the fixture's pid. It passed only because that pid was gone. The suite now
+  runs 72 assertions in **0.3 s**; the old run cost **534 ms**, and the difference is the proof.
+- **Two reviewer findings were refuted by measurement, and are recorded so they are not re-chased:**
+  the `console-message` handler is *not* broken on Electron 44 — the log contains real lines like
+  `[page:warning] [connection] connection lost, retry #3 (…)`, so `event.message` and `event.level`
+  work — and `redactToken('?token=a.b+c/d=e')` returns exactly `"?token=***"`, leaving nothing behind.
+  A third finding was half right: the quit path *always* settles because `graceMs` is capped at
+  120 000 and its timer is inside the race, so the consequence is a bounded stall, not a zombie
+  process. A fourth was wrong in a way that would have broken the feature: requiring the reaped
+  process's parent to be *this* process refuses every real reap, because a stale child's parent is
+  the previous run, which is dead by definition.
+- **Two of the tests the reviewer flagged were right and are fixed**: the "user's own dsh is never
+  reaped" case was testing the *time* branch only (its fixture even used `--profile web`, which the
+  real `dsh web` on this machine does not carry), and "the defaults match the config module" asserted
+  the function's own literals without ever consulting `DEFAULT_CONFIG`.
+- **Log timestamps are local with an offset** (`2026-09-12T14:59:55.328+08:00`). The file name and
+  the file's own modification time now agree to within a minute; they used to disagree by eight hours.
+- **The reaper now matches a description, not a guess.** The record carries `nodeExe`, `parentPid`
+  and `args` alongside the bin path and start time, and all of them must agree. The argv is matched
+  as one contiguous run because a test caught that per-token matching accepted `--port 3080` — it
+  contains the recorded token `0`.
+- **The boot-timeout floor rose from 5 s to 30 s** because nine measured boots took 8.67–10.20 s;
+  the documented minimum was below the mean, so choosing it made every launch time out.
+- **A defect was found by testing rather than by reading**: with `closeToTray` on, a second launch
+  focused a hidden window without showing it. `focus()` does nothing to a hidden window.
+

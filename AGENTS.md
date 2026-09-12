@@ -44,6 +44,11 @@ whose rule 7 is "this repo ships presets and nothing else". Do not move it in.
   with no error. The workspace is passed as the child's `cwd`. `src/args.mjs` asserts the exact array.
 - **`npm install` does not fetch Electron's binary** in this major — see `RUNBOOK.md`. A successful
   `npm install` with an empty `node_modules/electron/dist` is the expected failure, not a mystery.
+- **A test must never reach a real process.** `reapStaleChild` takes `{ probe, kill }` precisely so
+  every test can pass stubs; the default inspector runs PowerShell and the default killer is
+  `taskkill /PID /T /F`. The suite once called it with neither and would have tree-killed whatever
+  held the pid in its fixture — it passed only because that pid happened to be gone. `npm test` must
+  stay well under a second: a slow suite is the smell that something real is being spawned. D-13.
 
 ## Where things are
 

@@ -60,7 +60,11 @@ export function normalizeConfig(raw, onProblem = () => {}) {
   integer('port', 0, 65535);
   integer('restartLimit', 0, 100);
   integer('restartWindowMs', 1000, 3_600_000);
-  integer('bootTimeoutMs', 5000, 1_800_000);
+  // The floor is 30 s because a harness boot was measured at 8.7–10.2 s over
+  // nine runs on this machine, and the previous floor of 5 s sat below that:
+  // setting the documented minimum made every launch time out, with recovery
+  // only by hand-editing the file that the app never shows a path to.
+  integer('bootTimeoutMs', 30_000, 1_800_000);
   integer('graceMs', 0, 120_000);
 
   const workspace = raw.workspace;

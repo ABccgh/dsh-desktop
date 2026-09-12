@@ -84,6 +84,49 @@ export function redactToken(text) {
 }
 
 /**
+ * Shorten text bound for the log.
+ *
+ * The harness GUI's own console output is diagnostic gold and log poison: one
+ * measured message was 2654 characters, and three of them accounted for 29% of
+ * every byte the shell had ever logged. The head is the part that identifies the
+ * message, so the tail is truncated and the loss is stated rather than hidden.
+ *
+ * @param text - the text to shorten.
+ * @param limit - the maximum length to keep, including the marker.
+ * @returns the text, shortened if it was longer than the limit.
+ */
+export function truncateForLog(text, limit = 300) {
+  const value = typeof text === 'string' ? text : String(text ?? '');
+  if (value.length <= limit) return value;
+  const marker = `…(+${value.length - limit} chars)`;
+  // A limit smaller than the marker itself would otherwise return something
+  // *longer* than asked for. Asserted by this module's own suite.
+  if (marker.length >= limit) return value.slice(0, Math.max(0, limit));
+  return value.slice(0, limit - marker.length) + marker;
+}
+
+/**
+ * Whether a URL is one an external browser should be asked to open.
+ *
+ * Both places that hand a URL to the operating system take that URL from the
+ * loaded page. Restricting the scheme is the whole policy: `file:` and custom
+ * protocol handlers are what turn "the page opened a link" into "the page ran
+ * something".
+ *
+ * @param url - the candidate.
+ * @returns true only for http and https.
+ */
+export function isWebUrl(url) {
+  if (typeof url !== 'string' || url === '') return false;
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Feed stdout chunks and report the first readiness line.
  *
  * Lines are reassembled across chunk boundaries because a pipe split can land

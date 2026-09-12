@@ -155,3 +155,88 @@ would reverse it. Never rewrite an entry; supersede it with a new one.
   an unguarded write in a GUI process with no console would remain a defect waiting for the next
   missing stdout.
 
+## D-8: Is `state.json` safe to read, given that it is read during module evaluation?
+
+- **Decided:** No. It goes through `normalizeState` (`src/state.mjs`), which returns a plain object
+  for anything that is not one and reports what it discarded — the treatment `config.json` already had.
+- **Because:** `readJson` returns whatever the file parsed to, and a bare `null` is valid JSON. Every
+  key is then read during module evaluation — `resolveWorkspace()` dereferences `state.lastWorkspace`
+  at the top level — so the process died **before a window existed to report anything**, and before
+  the menu that reveals the file's path was built. Executed counterexample: both `JSON.parse('null').window`
+  and `.lastWorkspace` throw `TypeError`. Measured after the fix: with `state.json` containing `null`,
+  the packaged app logs `state: state is not a JSON object (null); ignoring it` and starts normally.
+- **Rejected:** trusting the shape because the app is the only writer. It is the only writer *while it
+  runs*; a truncated write, a hand edit, or a crash mid-write is exactly when this file is read most
+  eagerly — at the next start.
+- **Reversed by:** nothing. Validating input read from disk cannot be made wrong by a later change.
+
+## D-9: What identifies the child process the reaper is allowed to kill?
+
+- **Decided:** The **whole recorded description** must match: the dsh entry path, the Node binary, the
+  parent it was spawned from, the argv as one contiguous run, and the start time within ±10 s.
+- **Because:** the process this must never kill is the user's own `dsh web`, which runs the same CLI
+  entry file. The previous check was two substrings plus a time window, and the user's GUI was spared
+  only by argv *spelling* — the npx shim spells the same file through `.bin\..\`, so the recorded path
+  happened not to appear in it. That is a coincidence, not a check. The argv is matched as one run
+  rather than token by token because a test caught that `--port 3080` contains both the recorded token
+  `0` and `--port`; the joined string cannot be fooled that way.
+- **Rejected:** two changes that look like strengthenings and are not. (1) Requiring
+  `live.parentPid === process.pid` would refuse **every** real reap — a stale child's parent is the
+  *previous* run of the shell, dead by definition — so the check compares against the **recorded**
+  parent. (2) Hard-coding `--port 0` would silently stop reaping for anyone who pinned a port, which
+  is why the record carries the argv instead.
+- **Reversed by:** a future where the child is spawned through an intermediate process, changing what
+  "the recorded parent" means.
+
+## D-10: How does a failure reach the user once the interface has loaded?
+
+- **Decided:** `surfaceFailure()` — the loading page keeps showing the message inline, and once the
+  interface is up a native dialog carries it, with **Restart DSH / Show Logs / Dismiss**.
+- **Because:** `showStatus` writes through `window.__dshSetStatus`, which exists only on the loading
+  page. Once the GUI replaced it every status update was silently dropped, so a harness that gave up
+  left a window retrying forever — indistinguishable from a GUI that is merely slow, which is exactly
+  what `[connection] connection lost, retry #1..#3` in a real log looks like. Measured after the fix:
+  the crash-loop run logged `giving up:` once, then `failure surfaced to the user:` once.
+- **Rejected:** relying on a tray balloon alone; it is invisible when the window is in front, which is
+  precisely when a user is watching the interface fail to respond.
+- **Reversed by:** the interface gaining its own failure surface, which would make the dialog
+  redundant rather than wrong.
+
+## D-11: Should the harness GUI's own console output be logged?
+
+- **Decided:** Only errors, truncated to 300 characters; everything else needs `DSH_DESKTOP_DIAG=1`.
+- **Because:** measured, three page messages were 7962 characters — **29% of every byte the shell had
+  ever logged** — and the longest single line was 2654 characters. It is also content the shell does
+  not control, written to a file on disk.
+- **Rejected:** keeping all of it, on the grounds that a failed boot needs the page's messages. Errors
+  are still kept by default, and the truncation states how much it dropped rather than hiding it.
+- **Reversed by:** the GUI gaining a log of its own that the shell can point at instead.
+
+## D-12: What counts as a workspace on the command line?
+
+- **Decided:** Only an absolute path that exists and is a directory; an explicit `--workspace <dir>`
+  wins, and a bad one is refused rather than skipped.
+- **Because:** Electron's own argv carries its app path, which is `.` under `npm start`; taking the
+  first argument that names an existing directory made the shell adopt its own directory as the
+  workspace. Refusing rather than falling through matters too — after a mistyped `--workspace`, any
+  other absolute path in argv is a directory the user never named. Measured: a second launch naming
+  `D:\dsh-desktop` switched the workspace, spawned a child with `cwd=D:\dsh-desktop` on a new port,
+  and left exactly one window and one child.
+- **Rejected:** resolving relative paths against `process.cwd()`; in a dev launch the app path *is* `.`,
+  so that reading picks the application directory every time.
+- **Reversed by:** nothing — the rule only ever narrows what is accepted.
+
+## D-13: What must a test never do?
+
+- **Decided:** Never call the real process inspector or the real killer. `reapStaleChild` takes
+  `{ probe, kill }` so every test passes stubs, and the suite must run in well under a second.
+- **Because:** the suite previously called `reapStaleChild` with no probe against a hard-coded pid,
+  so `npm test` ran a real PowerShell query and would have run a real `taskkill /Tree /Force` had that
+  pid been live. It passed only because the pid was gone on this machine — and it cost 534 ms, which
+  is what a real subprocess spawn looks like. The suite now runs in ~0.3 s, and the disappearance of
+  that 534 ms is the observable proof.
+- **Rejected:** "it passed" as evidence. A test whose assertion is satisfied by machine state rather
+  than by the code under test is not a test.
+- **Reversed by:** nothing; this constrains the tests, not the code they cover.
+
+

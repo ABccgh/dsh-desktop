@@ -16,14 +16,16 @@
 
 import { app, BrowserWindow, Menu, Tray, clipboard, dialog, nativeImage, screen, shell } from 'electron';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalizeConfig } from './config.mjs';
+import { chooseGeometry } from './geometry.mjs';
 import { HarnessSupervisor } from './harness.mjs';
-import { resolveDshHome, resolveInstallAnchor, resolveNodeExe } from './paths.mjs';
+import { resolveDshHome, resolveInstallAnchor, resolveNodeExe, workspaceFromArgv } from './paths.mjs';
 import { reapStaleChild } from './reap.mjs';
-import { redactToken } from './url-line.mjs';
+import { normalizeState } from './state.mjs';
+import { isWebUrl, redactToken, truncateForLog } from './url-line.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -61,7 +63,29 @@ let quitting = false;
 // ---------------------------------------------------------------------------
 
 mkdirSync(LOG_DIR, { recursive: true });
-const logPath = join(LOG_DIR, `app-${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
+
+/**
+ * A local-time ISO timestamp carrying its UTC offset.
+ *
+ * `toISOString()` was simpler and wrong here: this machine is UTC+8, so every
+ * log line said `06:xx` while the file holding it was stamped `14:xx`, and the
+ * file *name* disagreed with the file's own modification time by eight hours.
+ *
+ * @param date - the moment to render; defaults to now.
+ * @returns e.g. `2026-09-12T14:35:07.205+08:00`.
+ */
+function timestamp(date = new Date()) {
+  const pad = (value, width = 2) => String(value).padStart(width, '0');
+  const offsetMinutes = -date.getTimezoneOffset();
+  const abs = Math.abs(offsetMinutes);
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}` +
+    `${offsetMinutes < 0 ? '-' : '+'}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+  );
+}
+
+const logPath = join(LOG_DIR, `app-${timestamp().replace(/[:.]/g, '-')}.log`);
 
 /**
  * Append one line to this run's log.
@@ -77,7 +101,7 @@ const logPath = join(LOG_DIR, `app-${new Date().toISOString().replace(/[:.]/g, '
  * @returns nothing.
  */
 function log(message) {
-  const line = `${new Date().toISOString()} ${message}\n`;
+  const line = `${timestamp()} ${message}\n`;
   try {
     appendFileSync(logPath, line, 'utf8');
   } catch {
@@ -153,7 +177,9 @@ if (!existsSync(CONFIG_PATH)) {
 }
 
 const config = normalizeConfig(readJson(CONFIG_PATH, undefined), (problem) => log(`config: ${problem}`));
-let state = readJson(STATE_PATH, {});
+// Object-or-nothing: a bare `null` in this file used to throw while the module
+// was still evaluating, before a window existed to report it. See state.mjs.
+let state = normalizeState(readJson(STATE_PATH, undefined), (problem) => log(`state: ${problem}`));
 log(`${APP_NAME} starting. userData=${USER_DATA}`);
 log(`log file: ${logPath}`);
 log(`config: ${JSON.stringify(config)}`);
@@ -169,10 +195,8 @@ log(`config: ${JSON.stringify(config)}`);
  * @returns the absolute workspace path.
  */
 function resolveWorkspace() {
-  const fromArgv = process.argv
-    .slice(app.isPackaged ? 1 : 2)
-    .find((argument) => !argument.startsWith('-') && existsSync(argument) && statSync(argument).isDirectory());
-  if (fromArgv !== undefined) {
+  const fromArgv = workspaceFromArgv(process.argv.slice(1));
+  if (fromArgv !== null) {
     log(`workspace: ${fromArgv} (from the command line)`);
     return fromArgv;
   }
@@ -208,28 +232,16 @@ function saveState(patch = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Restore the last window geometry, rejecting positions on displays that are
- * no longer attached so the window cannot come back off-screen.
- * @returns geometry to pass to the BrowserWindow constructor.
+ * Restore the last window geometry.
+ *
+ * The decision lives in `geometry.mjs` so its off-screen branch — a window
+ * saved on a monitor that is no longer attached — can be tested without
+ * unplugging anything.
+ *
+ * @returns `{ bounds, maximized }` for the BrowserWindow constructor.
  */
 function restoreGeometry() {
-  const saved = state.window;
-  const fallback = { width: 1280, height: 860 };
-  if (saved === undefined || saved === null) return fallback;
-  const { width, height, x, y } = saved;
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 640 || height < 480) return fallback;
-  if (!Number.isInteger(x) || !Number.isInteger(y)) return { width, height };
-  // Reject a position that no longer lands on an attached display, so a window
-  // saved on a since-unplugged monitor cannot come back invisible.
-  const displays = screen.getAllDisplays();
-  const visible = displays.some(
-    (display) =>
-      x + 80 > display.workArea.x &&
-      y + 40 > display.workArea.y &&
-      x < display.workArea.x + display.workArea.width &&
-      y < display.workArea.y + display.workArea.height,
-  );
-  return visible ? { width, height, x, y } : { width, height };
+  return chooseGeometry(state.window, screen.getAllDisplays());
 }
 
 /**
@@ -341,13 +353,71 @@ async function diagnoseConnectivity(origin) {
 }
 
 /**
+ * Open a URL in the user's own browser, refusing anything that is not the web.
+ *
+ * Both call sites hand a URL straight to the shell, and the loaded page decides
+ * what that URL is. Restricting the scheme is three lines and removes a whole
+ * class of "the page asked the OS to open this" surprises.
+ *
+ * @param url - the candidate URL.
+ * @param why - what asked for it, for the log.
+ * @returns nothing.
+ */
+function safeOpenExternal(url, why) {
+  if (!isWebUrl(url)) {
+    log(`refused to open a non-web URL from ${why}: ${truncateForLog(String(url), 120)}`);
+    return;
+  }
+  shell.openExternal(url).catch((error) => log(`could not open ${url}: ${error.message}`));
+}
+
+/**
+ * Make a failure the user can actually see.
+ *
+ * Before the interface loads, the loading page carries the message. Afterwards
+ * that page is gone, `window.__dshSetStatus` no longer exists, and every status
+ * update was silently dropped — so a harness that gave up left the window
+ * retrying forever with no explanation anywhere on screen.
+ *
+ * @param message - what happened, in the user's terms.
+ * @returns a promise settling once the user has been told (or the attempt failed).
+ */
+async function surfaceFailure(message) {
+  log(`failure surfaced to the user: ${message}`);
+  if (win === null || win.isDestroyed()) return;
+  if (currentUrl === null || harnessPageLoaded !== true) {
+    // The loading page is still what the user is looking at; showStatus already
+    // had its chance and this is the in-page path.
+    showStatus(message, true);
+    return;
+  }
+  if (!win.isVisible()) win.show();
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'error',
+      title: APP_NAME,
+      message: 'DeepSeek Harness stopped',
+      detail: message,
+      buttons: ['Restart DSH', 'Show Logs', 'Dismiss'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    });
+    if (response === 0 && supervisor !== null) await supervisor.restartWith(workspace);
+    else if (response === 1) void shell.openPath(LOG_DIR);
+  } catch (error) {
+    log(`could not present the failure dialog: ${error.message}`);
+  }
+}
+
+/**
  * Create the shell window and show the loading page until the harness is ready.
  * @returns the created window.
  */
 function createWindow() {
-  const geometry = restoreGeometry();
+  const { bounds, maximized } = restoreGeometry();
   win = new BrowserWindow({
-    ...geometry,
+    ...bounds,
     minWidth: 720,
     minHeight: 520,
     show: false,
@@ -381,9 +451,17 @@ function createWindow() {
     if (isMainFrame === true) log(`navigation started: ${redactToken(url)}`);
   });
   win.webContents.on('console-message', (event, level, message) => {
+    // The GUI's console is useful evidence and unusable as a log: one measured
+    // line was 2654 characters and three of them were 29% of the whole log. Only
+    // errors are kept by default, truncated; everything by DSH_DESKTOP_DIAG=1.
     const text = typeof event?.message === 'string' ? event.message : String(message ?? '');
-    const where = typeof event?.sourceId === 'string' && event.sourceId !== '' ? ` (${event.sourceId}:${String(event.lineNumber ?? '?')})` : '';
-    log(`[page:${String(event?.level ?? level ?? '?')}] ${redactToken(text)}${where}`);
+    const severity = String(event?.level ?? level ?? 'unknown');
+    if (severity !== 'error' && process.env.DSH_DESKTOP_DIAG !== '1') return;
+    const where =
+      typeof event?.sourceId === 'string' && event.sourceId !== ''
+        ? ` (${event.sourceId}:${String(event.lineNumber ?? '?')})`
+        : '';
+    log(`[page:${severity}] ${redactToken(truncateForLog(text))}${where}`);
   });
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     log(
@@ -402,16 +480,21 @@ function createWindow() {
   // Nothing in this app should open a second window: send links to the user's
   // browser instead, and never let the window navigate off the harness origin.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    log(`external link: ${url}`);
-    shell.openExternal(url).catch((error) => log(`could not open ${url}: ${error.message}`));
+    log(`external link requested: ${truncateForLog(url, 160)}`);
+    safeOpenExternal(url, 'the page');
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (event, url) => {
-    const origin = currentUrl === null ? null : new URL(currentUrl).origin;
-    if (origin !== null && new URL(url).origin === origin) return;
+    let sameOrigin = false;
+    try {
+      sameOrigin = currentUrl !== null && new URL(url).origin === new URL(currentUrl).origin;
+    } catch {
+      sameOrigin = false;
+    }
+    if (sameOrigin) return;
     event.preventDefault();
-    log(`blocked navigation to ${url}`);
-    shell.openExternal(url).catch(() => {});
+    log(`blocked navigation to ${truncateForLog(url, 160)}`);
+    safeOpenExternal(url, 'a blocked navigation');
   });
 
   win.on('close', (event) => {
@@ -428,9 +511,18 @@ function createWindow() {
   win.on('resize', saveWindowGeometrySoon);
   win.on('move', saveWindowGeometrySoon);
 
-  win.loadFile(join(HERE, 'loading.html')).catch((error) => log(`could not load the loading page: ${error.message}`));
-  if (state.window?.maximized === true) win.maximize();
-  showStatus('Starting DeepSeek Harness…');
+  if (maximized) win.maximize();
+  if (currentUrl !== null) {
+    // The harness is already running, so this is a window being reopened — from
+    // the tray, or by a second launch that found this instance. Showing the
+    // loading page here would leave it there for good: onReady fires once per
+    // child and will never fire again for a child that is already up.
+    log(`reopening the running harness at ${new URL(currentUrl).origin}`);
+    win.loadURL(currentUrl).catch((error) => log(`could not reopen the harness URL: ${error.message}`));
+  } else {
+    win.loadFile(join(HERE, 'loading.html')).catch((error) => log(`could not load the loading page: ${error.message}`));
+    showStatus('Starting DeepSeek Harness…');
+  }
   return win;
 }
 
@@ -478,12 +570,30 @@ async function chooseWorkspace() {
     properties: ['openDirectory', 'createDirectory'],
   });
   if (result.canceled || result.filePaths.length === 0) return;
-  const chosen = result.filePaths[0];
+  await switchWorkspace(result.filePaths[0]);
+}
+
+/**
+ * Point the running harness at another workspace.
+ *
+ * The child's working directory is the harness's workspace root and cannot be
+ * changed in place, so this is a restart, not a setting. Shared by the folder
+ * picker and by a second launch that names a directory, so both behave the same.
+ *
+ * @param chosen - the absolute directory to run in.
+ * @returns a promise settling once the replacement has been started.
+ */
+async function switchWorkspace(chosen) {
+  if (chosen === workspace) {
+    log(`workspace already ${chosen}; not restarting the harness`);
+    return;
+  }
   log(`workspace switched to ${chosen}`);
   workspace = chosen;
   saveState({ lastWorkspace: chosen });
-  showStatus(`Restarting DeepSeek Harness in ${chosen}…`);
   currentUrl = null;
+  harnessPageLoaded = false;
+  showStatus(`Restarting DeepSeek Harness in ${chosen}…`);
   if (supervisor !== null) await supervisor.restartWith(chosen);
 }
 
@@ -594,11 +704,34 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
-    log(`second instance requested; focusing. argv=${argv.join(' ')}`);
-    if (win === null) createWindow();
-    else {
-      if (win.isMinimized()) win.restore();
-      win.focus();
+    try {
+      const requested = workspaceFromArgv(argv.slice(1));
+      log(`second instance requested; requested workspace=${JSON.stringify(requested)} argv=${argv.join(' ')}`);
+      if (win === null) {
+        workspace = requested ?? workspace;
+        createWindow();
+        return;
+      }
+      const reveal = () => {
+        if (win === null) return;
+        if (win.isMinimized()) win.restore();
+        // `focus()` alone does nothing to a window that closeToTray has hidden,
+        // which left a hidden window unreachable from a second launch — measured.
+        if (!win.isVisible()) win.show();
+        win.focus();
+      };
+      if (requested !== null && requested !== workspace) {
+        void switchWorkspace(requested).then(reveal, (error) => {
+          log(`could not switch to ${requested}: ${error?.message ?? String(error)}`);
+          reveal();
+        });
+      } else {
+        reveal();
+      }
+    } catch (error) {
+      // An exception inside this handler is otherwise an unobserved rejection in
+      // a process with no console, which is how a silent no-op looks.
+      log(`second-instance handling failed: ${error?.stack ?? error?.message ?? String(error)}`);
     }
   });
 
@@ -609,9 +742,15 @@ if (!app.requestSingleInstanceLock()) {
     buildTray();
 
     // Reap a child left behind by a previous run before starting a new one, so
-    // a hard-killed shell cannot leave two harnesses holding one profile.
-    reapStaleChild(state.child ?? null, log);
-    saveState({ child: null });
+    // a hard-killed shell cannot leave two harnesses holding one profile. A
+    // refused reap keeps the record: it is the only handle on that process, and
+    // dropping it is what turns an orphan into an invisible one.
+    const reaped = reapStaleChild(state.child ?? null, log);
+    if (reaped.outcome === 'refused') {
+      log(`keeping the previous child record (pid ${String(reaped.pid)}): ${reaped.reason}`);
+    } else {
+      saveState({ child: null });
+    }
 
     let nodeExe;
     let anchor;
@@ -669,14 +808,30 @@ if (!app.requestSingleInstanceLock()) {
       },
       onRecord: (record) =>
         saveState({
+          // Everything the reaper will later check the live process against, so
+          // the identity check is a description match rather than a guess.
           child:
             record === null
               ? null
-              : { pid: record.pid, startedAt: record.startedAt, binPath: anchor.binPath, cwd: workspace },
+              : {
+                  pid: record.pid,
+                  startedAt: record.startedAt,
+                  binPath: anchor.binPath,
+                  nodeExe,
+                  parentPid: process.pid,
+                  args: record.args,
+                  cwd: workspace,
+                },
         }),
-      onGiveUp: (message) => showStatus(message, true),
+      onGiveUp: (message) => void surfaceFailure(message),
     });
     supervisor.start();
+  }).catch((error) => {
+    // Without this, a throw anywhere in the startup callback becomes an
+    // unobserved rejected promise: no window content, no message, and — in a
+    // packaged app — no stderr for anyone to read.
+    log(`startup failed: ${error?.stack ?? error?.message ?? String(error)}`);
+    showStatus(`DSH Desktop could not start.\n\n${error?.message ?? String(error)}`, true);
   });
 
   app.on('window-all-closed', () => {
@@ -688,11 +843,28 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     quitting = true;
     saveWindowGeometry();
-    const stopping = supervisor === null ? Promise.resolve() : supervisor.stop();
-    void stopping.finally(() => {
-      saveState({ child: null });
-      log('quit complete');
-      app.exit(0);
-    });
+    const stopping = supervisor === null ? Promise.resolve({ gone: true }) : supervisor.stop();
+    // A hard bound on top of the supervisor's own. `stop()` always settles
+    // because its grace timer is part of its race, but this is what guarantees
+    // the process can leave even if that assumption ever stops holding — and
+    // `quitting` is already true, so nothing else will retry the quit.
+    const abandon = new Promise((resolve) =>
+      setTimeout(() => resolve({ gone: false, abandoned: true }), Math.max(2000, config.graceMs + 2000)),
+    );
+    void Promise.race([stopping, abandon]).then(
+      (outcome) => {
+        const gone = outcome?.gone === true;
+        // The record is cleared only when the child is confirmed gone: keeping a
+        // stale record is recoverable, losing a live one is not.
+        if (gone) saveState({ child: null });
+        else log('the harness child could not be confirmed gone; keeping its record so the next launch reaps it');
+        log(`quit complete (child gone: ${String(gone)})`);
+        app.exit(0);
+      },
+      (error) => {
+        log(`quit cleanup failed: ${error?.message ?? String(error)}; leaving the record in place`);
+        app.exit(0);
+      },
+    );
   });
 }

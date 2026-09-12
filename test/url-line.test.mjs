@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createReadyScanner, parseUrlLine, redactToken } from '../src/url-line.mjs';
+import { createReadyScanner, isWebUrl, parseUrlLine, redactToken, truncateForLog } from '../src/url-line.mjs';
 
 const GOOD = 'dsh web: http://127.0.0.1:54321/?token=9f2c1ab4d5e6';
 
@@ -9,6 +9,7 @@ test('parses the canonical readiness line', () => {
   const url = parseUrlLine(GOOD);
   assert.ok(url instanceof URL);
   assert.equal(url.origin, 'http://127.0.0.1:54321');
+  assert.equal(url.port, '54321', 'the port is asserted here, not only in a later test');
   assert.equal(url.pathname, '/');
   assert.equal(url.searchParams.get('token'), '9f2c1ab4d5e6');
 });
@@ -119,8 +120,53 @@ test('redaction stops at the closing parenthesis of the LAN suffix', () => {
   // Caught by this suite: a greedy value class swallowed the ")" and produced a
   // line that misreported which URL the token belonged to.
   assert.equal(redactToken('(LAN: http://10.0.0.1:1/?token=abc)'), '(LAN: http://10.0.0.1:1/?token=***)');
-  // The delimiter rule is what keeps the whole secret out, not the token's shape.
-  assert.equal(redactToken('?token=a.b+c/d=e').endsWith('***'), true);
+  // Asserted as a whole string, not with endsWith: an assertion that only checks
+  // the tail would still hold for a regex that dropped part of the value.
+  assert.equal(redactToken('?token=a.b+c/d=e'), '?token=***');
+  // A fragment has no `&`, whitespace, or `)` before it, so it is swallowed with
+  // the value. Over-redacting is the safe direction; under-redacting is not.
+  assert.equal(redactToken('?token=abc#frag'), '?token=***');
+});
+
+test('only the web may be handed to the operating system', () => {
+  // The URL comes from the loaded page in both call sites, so the scheme is the
+  // entire policy.
+  for (const allowed of ['http://127.0.0.1:1/x', 'https://example.com/a?b=c']) {
+    assert.equal(isWebUrl(allowed), true, `${allowed} should be allowed`);
+  }
+  for (const refused of [
+    'file:///C:/Windows/System32/calc.exe',
+    'javascript:alert(1)',
+    'data:text/html,<script>x</script>',
+    'ms-settings:',
+    'vscode://file/C:/x',
+    'ftp://example.com/f',
+    'not a url',
+    '',
+    undefined,
+    null,
+    42,
+  ]) {
+    assert.equal(isWebUrl(refused), false, `${String(refused)} should be refused`);
+  }
+});
+
+test('log truncation keeps the head and says what it dropped', () => {
+  assert.equal(truncateForLog('short'), 'short');
+  assert.equal(truncateForLog(''), '');
+  assert.equal(truncateForLog(undefined), '');
+  assert.equal(truncateForLog(42), '42');
+
+  const long = 'x'.repeat(2654); // the longest line this project actually logged
+  const shortened = truncateForLog(long);
+  assert.equal(shortened.length, 300);
+  assert.ok(shortened.startsWith('xxx'));
+  assert.ok(shortened.endsWith('…(+2354 chars)'), shortened.slice(-20));
+
+  // A limit smaller than the marker must not produce a longer string.
+  assert.ok(truncateForLog(long, 10).length <= 10);
+  assert.equal(truncateForLog(long, long.length), long, 'the boundary is inclusive');
+  assert.equal(truncateForLog(long, 2653).length, 2653);
 });
 
 test('redaction leaves text without a token alone, including non-strings', () => {

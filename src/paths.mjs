@@ -5,9 +5,9 @@
  * @module dsh-desktop/paths
  */
 
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 
 /**
  * The Harness home.
@@ -79,11 +79,53 @@ export function resolveInstallAnchor(dshHome) {
 }
 
 /**
+ * The workspace named on the command line, if there is one.
+ *
+ * Two rules, both learned from how this app is actually launched:
+ *
+ * - **Only absolute paths count.** Electron's own argv contains the app path,
+ *   which is `.` under `npm start` and resolves to whatever the process's
+ *   working directory happens to be. Treating that as a workspace silently
+ *   moved the harness to the app's own directory.
+ * - **An explicit `--workspace` wins, and a bad one is refused rather than
+ *   skipped.** Falling through to some other argument after a mistyped flag
+ *   would switch the workspace to a directory the user never named.
+ *
+ * @param argv - the argument list, without the executable itself.
+ * @param options - `isDirectory` is injected so this is testable without a disk.
+ * @returns the absolute workspace path, or null when none was named usably.
+ */
+export function workspaceFromArgv(argv, options = {}) {
+  if (!Array.isArray(argv)) return null;
+  const isDirectory = options.isDirectory ?? ((candidate) => {
+    try {
+      return existsSync(candidate) && statSync(candidate).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+
+  const flag = argv.indexOf('--workspace');
+  if (flag !== -1) {
+    const value = argv[flag + 1];
+    if (typeof value !== 'string' || value === '') return null;
+    return isDirectory(value) ? value : null;
+  }
+
+  for (const argument of argv) {
+    if (typeof argument !== 'string' || argument.startsWith('-')) continue;
+    if (!isAbsolute(argument)) continue;
+    if (isDirectory(argument)) return argument;
+  }
+  return null;
+}
+
+/**
  * The Node executable the child runs on.
  *
- * A child on the system Node v26.8.1 — the runtime the user's own harness
- * already runs on — rather than Electron's bundled Node, whose major version
- * differs. See `docs/agent-notes/PROJECT.md` for the measurements.
+ * A child on the system Node — the runtime the user's own harness already runs
+ * on — rather than Electron's bundled Node, whose major version differs. See
+ * `docs/agent-notes/PROJECT.md` for the measurements.
  *
  * @param env - an environment mapping; defaults to this process's.
  * @returns the Node executable path.
