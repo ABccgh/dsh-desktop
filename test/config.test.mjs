@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { DEFAULT_CONFIG, normalizeConfig } from '../src/config.mjs';
+import { DEFAULT_CONFIG, normalizeConfig, problemMessage } from '../src/config.mjs';
+import { createTranslator } from '../src/i18n.mjs';
 
 test('an absent config yields the defaults', () => {
   assert.deepEqual(normalizeConfig(undefined), DEFAULT_CONFIG);
@@ -12,7 +13,11 @@ test('a config that is not an object is reported and replaced', () => {
   const problems = [];
   assert.deepEqual(normalizeConfig([1, 2, 3], (p) => problems.push(p)), DEFAULT_CONFIG);
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /not an object/);
+  assert.equal(problems[0].kind, 'notObject');
+  // Notes are structured, not sentences: the sentence has to come out in the
+  // reader's language and this module cannot know which one that is.
+  assert.match(problemMessage(problems[0]), /not an object/);
+  assert.match(problemMessage(problems[0], createTranslator('zh')), /不是一个对象/);
 
   const stringProblems = [];
   assert.deepEqual(normalizeConfig('nope', (p) => stringProblems.push(p)), DEFAULT_CONFIG);
@@ -27,6 +32,7 @@ test('valid values are kept', () => {
   const config = normalizeConfig({
     port: 3081,
     workspace: 'D:\\projects',
+    language: 'zh',
     restartLimit: 5,
     restartWindowMs: 30_000,
     bootTimeoutMs: 60_000,
@@ -39,6 +45,7 @@ test('valid values are kept', () => {
   assert.deepEqual(config, {
     port: 3081,
     workspace: 'D:\\projects',
+    language: 'zh',
     restartLimit: 5,
     restartWindowMs: 30_000,
     bootTimeoutMs: 60_000,
@@ -50,13 +57,33 @@ test('valid values are kept', () => {
   });
 });
 
+test('the language accepts exactly the three choices, and refuses the rest', () => {
+  for (const choice of ['auto', 'zh', 'en']) {
+    const problems = [];
+    const config = normalizeConfig({ language: choice }, (p) => problems.push(p));
+    assert.equal(config.language, choice);
+    assert.equal(problems.length, 0, `${choice} is a real choice and must not be reported`);
+  }
+  // A hand-edited config cannot make the lookup miss: an unknown id is refused
+  // here, where the reason is visible, rather than falling through to `auto`
+  // deep inside the translator.
+  for (const bad of ['ja', 'ZH', '', 7, null, true, ['zh']]) {
+    const problems = [];
+    const config = normalizeConfig({ language: bad, port: 1234 }, (p) => problems.push(p));
+    assert.equal(config.language, DEFAULT_CONFIG.language, `${JSON.stringify(bad)} should fall back`);
+    assert.equal(problems.length, 1, `${JSON.stringify(bad)} should be reported`);
+    assert.match(problemMessage(problems[0]), /language/);
+    assert.equal(config.port, 1234, 'one bad field must not discard the others');
+  }
+});
+
 test('the hotkey may be turned off with null, and refuses a blank string', () => {
   assert.equal(normalizeConfig({ globalHotkey: null }).globalHotkey, null);
   const problems = [];
   const config = normalizeConfig({ globalHotkey: '   ' }, (p) => problems.push(p));
   assert.equal(config.globalHotkey, DEFAULT_CONFIG.globalHotkey, 'blank falls back rather than disabling');
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /globalHotkey/);
+  assert.match(problemMessage(problems[0]), /globalHotkey/);
 });
 
 test('maxWindows is bounded, and its bounds are inclusive', () => {
@@ -110,7 +137,7 @@ test('each invalid value falls back to its default and says so', () => {
     const config = normalizeConfig(raw, (p) => problems.push(p));
     assert.deepEqual(config, DEFAULT_CONFIG, `should have fallen back for ${JSON.stringify(raw)}`);
     assert.equal(problems.length, 1, `should have reported one problem for ${JSON.stringify(raw)}`);
-    assert.match(problems[0], new RegExp(key), `problem should name ${key}`);
+    assert.match(problemMessage(problems[0]), new RegExp(key), `problem should name ${key}`);
   }
 });
 

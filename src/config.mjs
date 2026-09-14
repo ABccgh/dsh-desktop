@@ -4,6 +4,45 @@
  * @module dsh-desktop/config
  */
 
+import { LANGUAGES, createTranslator } from './i18n.mjs';
+
+/**
+ * The English table, used when a caller injects no translator.
+ *
+ * `normalizeConfig` is called before the language is chosen — its notes are what
+ * the startup log is made of — so the default has to render rather than fail.
+ */
+const englishMessages = createTranslator('en');
+
+/**
+ * Render one rejected-value note as text.
+ *
+ * The note is structured so the same rejection can be read in any language; this
+ * is the only place it becomes a sentence. A key the field's own name is used
+ * for is deliberate: it is the name in `config.json`, which is where a user who
+ * wants to fix it has to look.
+ *
+ * @param problem - the note from `normalizeConfig`.
+ * @param t - optional translator; defaults to English.
+ * @returns the sentence to show or log.
+ */
+export function problemMessage(problem, t) {
+  const say = typeof t === 'function' ? t : englishMessages;
+  const params = {
+    key: problem.key,
+    kind: problem.kind,
+    min: problem.min,
+    max: problem.max,
+    allowed: Array.isArray(problem.allowed) ? problem.allowed.join(', ') : problem.allowed,
+    got: JSON.stringify(problem.got),
+    using: JSON.stringify(problem.using),
+  };
+  // `kind` is a closed set chosen inside this module, so an unrecognised one
+  // means the note and this function have drifted apart; saying so beats
+  // indexing a missing message and showing `undefined`.
+  return say(`config.problem.${problem.kind}`, params);
+}
+
 /**
  * Defaults, and the accepted range of each field.
  *
@@ -17,6 +56,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   port: 0,
   /** Workspace directory the child runs in; null means "last used, else home". */
   workspace: null,
+  /** Interface language: `auto` follows the system, otherwise `zh` or `en`. */
+  language: 'auto',
   /** Unexpected child exits tolerated inside the window before giving up. */
   restartLimit: 3,
   /** The window those exits are counted over. */
@@ -39,17 +80,20 @@ export const DEFAULT_CONFIG = Object.freeze({
  * Coerce arbitrary parsed JSON into a usable config.
  *
  * Unknown keys are dropped and invalid values fall back to their default, so a
- * hand-edited config can never make the shell unstartable. Each drop is
- * reported through `onProblem` rather than silently.
+ * hand-edited config can never make the shell unstartable. Each drop is reported
+ * through `onProblem` as a **structured** note — the field, the constraint, and
+ * the values involved — rather than a finished sentence, because that sentence
+ * has to come out in the reader's language and this module cannot know which one
+ * that is. See `problemMessage` for the one place a note becomes text.
  *
  * @param raw - the parsed config file, or undefined when it does not exist.
- * @param onProblem - called with a human-readable note for each rejected value.
+ * @param onProblem - called with one note per rejected value.
  * @returns a complete config.
  */
 export function normalizeConfig(raw, onProblem = () => {}) {
   const config = { ...DEFAULT_CONFIG };
   if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    if (raw !== undefined) onProblem('config is not an object; using defaults');
+    if (raw !== undefined) onProblem({ key: 'config', kind: 'notObject' });
     return config;
   }
 
@@ -57,7 +101,7 @@ export function normalizeConfig(raw, onProblem = () => {}) {
     const value = raw[key];
     if (value === undefined) return;
     if (!Number.isInteger(value) || value < min || value > max) {
-      onProblem(`config.${key} must be an integer in ${min}..${max}, got ${JSON.stringify(value)}; using ${config[key]}`);
+      onProblem({ key, kind: 'integer', min, max, got: value, using: config[key] });
       return;
     }
     config[key] = value;
@@ -77,22 +121,27 @@ export function normalizeConfig(raw, onProblem = () => {}) {
   const workspace = raw.workspace;
   if (workspace !== undefined && workspace !== null) {
     if (typeof workspace === 'string' && workspace.trim() !== '') config.workspace = workspace;
-    else onProblem(`config.workspace must be a non-empty string or null, got ${JSON.stringify(workspace)}; using null`);
+    else onProblem({ key: 'workspace', kind: 'nonEmptyString', got: workspace, using: null });
   }
 
   const closeToTray = raw.closeToTray;
   if (closeToTray !== undefined) {
     if (typeof closeToTray === 'boolean') config.closeToTray = closeToTray;
-    else onProblem(`config.closeToTray must be a boolean, got ${JSON.stringify(closeToTray)}; using ${config.closeToTray}`);
+    else onProblem({ key: 'closeToTray', kind: 'boolean', got: closeToTray, using: config.closeToTray });
+  }
+
+  // An unknown language is refused rather than kept: it would resolve to `auto`
+  // deep inside the translator, where the reason for the fallback is invisible.
+  const language = raw.language;
+  if (language !== undefined) {
+    if (LANGUAGES.includes(language)) config.language = language;
+    else onProblem({ key: 'language', kind: 'oneOf', allowed: LANGUAGES, got: language, using: config.language });
   }
 
   const notifyOnFailure = raw.notifyOnFailure;
   if (notifyOnFailure !== undefined) {
     if (typeof notifyOnFailure === 'boolean') config.notifyOnFailure = notifyOnFailure;
-    else
-      onProblem(
-        `config.notifyOnFailure must be a boolean, got ${JSON.stringify(notifyOnFailure)}; using ${config.notifyOnFailure}`,
-      );
+    else onProblem({ key: 'notifyOnFailure', kind: 'boolean', got: notifyOnFailure, using: config.notifyOnFailure });
   }
 
   // Null disables the hotkey; a string is passed to Electron as-is, and a
@@ -101,10 +150,7 @@ export function normalizeConfig(raw, onProblem = () => {}) {
   const globalHotkey = raw.globalHotkey;
   if (globalHotkey !== undefined && globalHotkey !== null) {
     if (typeof globalHotkey === 'string' && globalHotkey.trim() !== '') config.globalHotkey = globalHotkey.trim();
-    else
-      onProblem(
-        `config.globalHotkey must be a non-empty string or null, got ${JSON.stringify(globalHotkey)}; using ${config.globalHotkey}`,
-      );
+    else onProblem({ key: 'globalHotkey', kind: 'nonEmptyString', got: globalHotkey, using: config.globalHotkey });
   } else if (globalHotkey === null) {
     config.globalHotkey = null;
   }

@@ -27,6 +27,11 @@ your sessions are exactly the ones you already have. Nothing is copied, and noth
 
 - Tray icon and application menu; external links open in your real browser; a folder picker for the
   workspace; optional close-to-tray.
+- **A Chinese interface**, and a language switch. The shell's own surfaces — menu, tray, settings
+  window, the pre-harness page, dialogs, and the messages it shows when the harness fails — are
+  translated, and `Language` (`自动` / `中文` / `English`) chooses. `Auto` follows the system
+  language, and so does the GUI inside the window, because `auto` deliberately leaves Chromium's
+  own locale alone. `--language <id>` does the same from the command line.
 - A **settings window** (`File → Settings…`) with a live view of the resolved Node, harness and log
   paths, and per-field validation. Clearing a field leaves that setting alone rather than resetting
   it — the form cannot tell a box you emptied from one it never filled, so **Restore defaults** is
@@ -35,7 +40,8 @@ your sessions are exactly the ones you already have. Nothing is copied, and noth
   have opened, so a project is one right-click away.
 - A **diagnostics bundle** (`Help → Export Diagnostics…`) — versions, resolved paths, window and
   config state, and the tail of the log, with tokens stripped.
-- Command line: `--version`, `--help`, `--settings`, and a folder to use as the workspace.
+- Command line: `--version`, `--help`, `--settings`, `--language <auto|zh|en>`, and a folder to use as
+  the workspace.
 
 **Privacy**
 
@@ -72,15 +78,17 @@ against, and the harness runs on that Node, not on Electron's bundled one (see
 
 ```powershell
 npm start                        # run from source
-npm test                         # 79 tests over the pure modules, ~0.3 s
-npm run smoke                    # the acceptance ladder against the packaged build
+npm test                         # 100 tests over the pure modules, ~0.4 s
+npm run smoke                    # the acceptance ladder (19 checks) against the packaged build
 npm start -- "D:\some\project"   # start with that folder as the workspace
 npm start -- --settings          # open with the settings window showing
+npm start -- --language en       # force the shell's language, for one run
 ```
 
 `npm run smoke` drives the packaged build and needs `npm run pack` first; `npm run smoke:dev` runs the
-same ladder against `electron .`. Either way it is a real launch of the real thing, and takes about
-half a minute.
+same ladder against `electron .`. Either way it is a real launch of the real thing, and takes about a
+minute: the ladder includes a second launch with `--language en` to prove an explicit language really
+overrides the system's.
 
 Set `DSH_DESKTOP_DIAG=1` to have startup probe, and log, whether each network layer can reach the
 harness. It is the first thing to reach for when the window does not load.
@@ -90,6 +98,7 @@ harness. It is the first thing to reach for when the window does not load.
 | Path | What lives there |
 | --- | --- |
 | `src/` | The shell: Electron main, the child supervisor, the pure modules, the two pages |
+| `src/i18n.mjs` | Every string the shell shows, in Chinese and English, plus the language resolver |
 | `bin/` | `pack.mjs` (portable build), `smoke.mjs` (acceptance), `shortcut.ps1` (integration) |
 | `tools/make-icon.mjs` | SVG → PNG → ICO, with the payload size checked against the declared one |
 | `test/` | `node --test`; every module that can be pure is pure so it can be tested without a disk |

@@ -46,14 +46,54 @@ Timestamps are local with a UTC offset, so the file name agrees with the file's 
 ## Verify end to end
 
 ```powershell
-npm run smoke         # the packaged build: 12 checks, exit code 0 when all pass
+npm run smoke         # the packaged build: 19 checks, exit code 0 when all pass
 npm run smoke:dev     # the same ladder against `electron .`
 ```
 
 The ladder is: readiness captured → the port is real and not 3080 → the interface mounted → no token
-in the log → exactly one harness child on the right argv and port → an unauthenticated root request
-is refused → the user's own GUI is untouched → quitting reaps the child and clears its record.
+in the log → **the shell resolved a language and said which, and it is the system's or the one asked
+for** → exactly one harness child on the right argv and port → an unauthenticated root request is
+refused → the user's own GUI is untouched → quitting reaps the child and clears its record → **then a
+second launch with `--language en`**, which must start its own harness, resolve to English on a Chinese
+system, and reap its child in turn.
 It leaves the app running if it fails, deliberately, so the state can be inspected.
+
+**The language checks can only prove the shell's half, and that is worth knowing before trusting
+them.** They read the resolved language out of the log; whether the *GUI* inside the window followed is
+a separate question with a separate answer (D-24: an explicit choice does steer the GUI too, `auto`
+leaves it to the system).
+
+**One command starts a launch that takes the single-instance lock**, so before running the ladder check
+nothing else is running:
+
+```powershell
+Get-Process -Name 'DSH Desktop','electron' -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime
+```
+
+A stale instance does not fail the ladder loudly — the new launch logs
+`another instance owns the lock; exiting` and the ladder then reports its first check against the
+*other* instance's log. Kill only pids you started, with `taskkill /PID <pid> /T /F`; never by name.
+
+## Check the interface language
+
+```powershell
+# What the shell decided, and what it told Chromium. `auto` on a zh-CN machine must say zh.
+Get-Content (Get-ChildItem "$env:APPDATA\DSH Desktop\logs\*.log" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName |
+  Select-String -Pattern 'language:'
+
+# Force one run's language from the command line; this reads no settings and writes none.
+npm start -- --language en
+npm start -- --language zh
+
+# Terminal output only, no window and no lock:
+& node_modules\electron\dist\electron.exe . --help
+& node_modules\electron\dist\electron.exe . --help --language en
+```
+
+The expected lines are `language: auto — Chromium keeps the system locale, so the GUI follows the
+system too` (for `auto`), then `language: <zh|en> (setting <choice>, system <detected>)`. The GUI
+inside the window is a separate program and follows `navigator.languages`; `--lang` never reaches it,
+which is why forcing `en` gives an English shell around an unchanged GUI.
 
 ## Build and install
 

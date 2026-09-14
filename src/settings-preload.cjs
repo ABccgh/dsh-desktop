@@ -30,4 +30,6 @@ contextBridge.exposeInMainWorld('dshSettings', {
   close: () => ipcRenderer.invoke('settings:close'),
   /** Write a support bundle; resolves to its path, or null on failure. */
   exportDiagnostics: () => ipcRenderer.invoke('diagnostics:export'),
+  /** This window's own copy, keyed by message id; no argument, so nothing new is reachable. */
+  strings: () => ipcRenderer.invoke('settings:strings'),
 });

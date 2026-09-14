@@ -17,8 +17,17 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { harnessArgs } from './args.mjs';
+import { createTranslator } from './i18n.mjs';
 import { shouldRestart } from './restart-policy.mjs';
 import { createReadyScanner, redactToken } from './url-line.mjs';
+
+/**
+ * The English table, used when no translator is injected.
+ *
+ * A supervisor used on its own — which is what the unit tests do — must still
+ * produce the sentence it always produced, not a bare key.
+ */
+const englishMessages = createTranslator('en');
 
 /**
  * Environment variables removed from the child's environment.
@@ -97,14 +106,16 @@ export class HarnessSupervisor {
 
   /**
    * @param options - everything the supervisor needs, injected so it holds no
-   *   ambient state of its own.
+   *   ambient state of its own. `t` renders the failures a user will read; it
+   *   defaults to the plain English text so a unit test can assert one.
    */
-  constructor({ nodeExe, anchor, config, cwd, log, onReady, onStatus, onRecord, onGiveUp }) {
+  constructor({ nodeExe, anchor, config, cwd, log, t, onReady, onStatus, onRecord, onGiveUp }) {
     this.nodeExe = nodeExe;
     this.anchor = anchor;
     this.config = config;
     this.cwd = cwd;
     this.log = log;
+    this.t = typeof t === 'function' ? t : englishMessages;
     this.onReady = onReady ?? (() => {});
     this.onStatus = onStatus ?? (() => {});
     this.onRecord = onRecord ?? (() => {});
@@ -185,15 +196,15 @@ export class HarnessSupervisor {
       this.log(`no readiness line within ${this.config.bootTimeoutMs} ms; terminating the child`);
       killTree(child.pid);
       this.#fail(
-        `The harness did not report a URL within ${Math.round(this.config.bootTimeoutMs / 1000)}s. ` +
-          `Its output is in the log. This usually means the DSH tree failed to load, or that the ` +
-          `Node.js on PATH is too old for it.`,
+        this.t('harness.bootTimeout', {
+          seconds: Math.round(this.config.bootTimeoutMs / 1000),
+        }),
       );
     }, this.config.bootTimeoutMs);
 
     child.on('error', (error) => {
       this.log(`child error event: ${error.message}`);
-      this.#fail(`Could not start the harness: ${error.message}`);
+      this.#fail(this.t('harness.spawnFailed', { message: error.message }));
     });
 
     child.on('exit', (code, signal) => {
@@ -232,9 +243,9 @@ export class HarnessSupervisor {
     });
     this.#attempts = recent;
 
-    const reason = `The harness exited (code=${String(code)} signal=${String(signal)}).`;
+    const reason = this.t('harness.exited', { code: String(code), signal: String(signal) });
     if (!restart) {
-      this.#fail(`${reason} It exited ${recent.length} times in a row, so this shell has stopped restarting it.`);
+      this.#fail(this.t('harness.gaveUp', { reason, count: recent.length }));
       return;
     }
     this.log(`restarting in 1000 ms (${recent.length}/${this.config.restartLimit} recent exits)`);

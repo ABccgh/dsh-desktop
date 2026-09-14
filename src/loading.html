@@ -36,23 +36,89 @@
     <main>
       <div class="spinner"></div>
       <h1>DSH Desktop</h1>
-      <p id="status">Starting DeepSeek Harness…</p>
+      <p id="status" data-i18n="page.starting">Starting DeepSeek Harness…</p>
       <p id="hint"></p>
     </main>
     <script>
+      /** This page's own copy, replaced wholesale by the main process. */
+      var strings = {};
+
       /**
-       * Status sink for the main process. The main process calls this through
-       * `webContents.executeJavaScript`, so there is no preload script and no
-       * node integration in this page.
+       * The last status this page was told to show.
+       *
+       * Kept so a later dictionary push can re-render it: the status text is
+       * resolved by the main process, so without this a failure message would
+       * keep the language it was pushed under.
        */
-      window.__dshSetStatus = function (text, isError) {
+      var lastStatus = null;
+
+      /**
+       * Apply a dictionary pushed by the main process.
+       *
+       * The main process calls this through `webContents.executeJavaScript`, so
+       * there is no preload script and no node integration in this page — the
+       * same mechanism as `__dshSetStatus` below.
+       */
+      window.__dshApplyStrings = function (next) {
+        strings = next || {};
+        if (strings.__lang) document.documentElement.lang = strings.__lang;
+        for (var node of document.querySelectorAll('[data-i18n]')) {
+          // `#status` belongs to `__dshSetStatus`. Writing this dictionary's
+          // "starting" copy over it replaced a live failure message with it,
+          // which is how a boot timeout turned into an eternally starting page.
+          if (node.id === 'status') continue;
+          node.textContent = strings[node.dataset.i18n] || node.dataset.i18n;
+        }
+        renderStatus();
+      };
+
+      /**
+       * Render the current status, in whatever language the dictionary says.
+       *
+       * `key` is set when the main process knows which message this is, and is
+       * what makes a live language switch re-render the sentence rather than
+       * leave it in the language it was pushed under. `text` is the fallback:
+       * a supervisor failure the main process already rendered, which no
+       * dictionary defines and which therefore passes through unchanged.
+       */
+      function renderStatus() {
+        if (lastStatus === null) return;
         var status = document.getElementById('status');
-        status.textContent = text;
-        status.classList.toggle('error', Boolean(isError));
-        document.body.classList.toggle('error', Boolean(isError));
-        document.getElementById('hint').textContent = isError
-          ? 'The log has the full output. See Help → Show Log Folder in the menu.'
+        var hint = document.getElementById('hint');
+        status.textContent = message(lastStatus.key || lastStatus.text, lastStatus.params);
+        status.classList.toggle('error', Boolean(lastStatus.isError));
+        // The hint is rendered here rather than sent as a second message, so the
+        // two cannot disagree about what the failure was.
+        hint.textContent = lastStatus.isError
+          ? strings['status.hint'] || 'The log has the full output. See Help → Show Log Folder in the menu.'
           : '';
+      }
+
+      /**
+       * One message, in the page's language, falling back to the text itself.
+       * @param {string} key - a message id, or text already rendered.
+       * @param {object} [params] - replacements for `{name}` placeholders.
+       * @returns {string} the text to show.
+       */
+      function message(key, params) {
+        var template = strings[key] || key;
+        if (!params) return template;
+        return template.replace(/\{(\w+)\}/g, function (match, name) {
+          return name in params ? String(params[name]) : match;
+        });
+      }
+
+      /**
+       * Status sink for the main process.
+       * @param {string} text - text the main process rendered, or a message id.
+       * @param {boolean} isError - whether to render it as a failure.
+       * @param {object} [params] - replacements for `{name}` placeholders.
+       * @param {string} [key] - the message id, when the main process has one.
+       */
+      window.__dshSetStatus = function (text, isError, params, key) {
+        lastStatus = { key: key || null, text: text, isError: Boolean(isError), params: params || null };
+        document.body.classList.toggle('error', Boolean(isError));
+        renderStatus();
       };
     </script>
   </body>

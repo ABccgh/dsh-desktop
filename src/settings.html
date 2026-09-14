@@ -20,11 +20,12 @@
            color: #8b95a5; margin: 1.4rem 0 .5rem; font-weight: 600; }
       .row { display: grid; grid-template-columns: 15rem 1fr; gap: .5rem .75rem; align-items: center; }
       label { color: #c3cad6; }
-      input[type=number], input[type=text] {
+      input[type=number], input[type=text], select {
         width: 100%; padding: .35rem .5rem; background: #171c22; color: #e6e9ef;
         border: 1px solid #2c333d; border-radius: 5px; font: inherit;
       }
-      input:focus { outline: 1px solid #5b9dff; border-color: #5b9dff; }
+      select { width: auto; min-width: 12rem; }
+      input:focus, select:focus { outline: 1px solid #5b9dff; border-color: #5b9dff; }
       .hint { grid-column: 2; color: #6b7482; font-size: 12px; margin: -.25rem 0 .25rem; }
       .value { color: #e6e9ef; overflow-wrap: anywhere; }
       button {
@@ -41,64 +42,72 @@
     </style>
   </head>
   <body>
-    <h1>DSH Desktop — Settings</h1>
+    <h1 data-i18n="settings.title">DSH Desktop — Settings</h1>
 
-    <h2>Workspace</h2>
+    <h2 data-i18n="settings.section.workspace">Workspace</h2>
     <div class="row">
-      <span>Current</span>
+      <span data-i18n="settings.workspace.current">Current</span>
       <span class="value" id="workspace">…</span>
       <span></span>
-      <span><button id="choose">Choose folder…</button><span class="hint" style="display:inline">applies immediately, restarting the harness</span></span>
+      <span><button id="choose" data-i18n="settings.workspace.choose">Choose folder…</button><span class="hint" style="display:inline" data-i18n="settings.workspace.hint">applies immediately, restarting the harness</span></span>
     </div>
 
-    <h2>Harness</h2>
+    <h2 data-i18n="settings.section.harness">Harness</h2>
     <div class="row">
-      <label for="port">Port</label>
+      <label for="port" data-i18n="settings.port">Port</label>
       <input id="port" type="number" min="0" max="65535" />
-      <span class="hint">0 lets the OS choose a free one; a fixed port can collide with your own `dsh web`</span>
+      <span class="hint" data-i18n="settings.port.hint">0 lets the OS choose a free one; a fixed port can collide with your own `dsh web`</span>
 
-      <label for="bootTimeoutMs">Boot timeout (ms)</label>
+      <label for="bootTimeoutMs" data-i18n="settings.bootTimeout">Boot timeout (ms)</label>
       <input id="bootTimeoutMs" type="number" min="30000" />
-      <span class="hint">how long to wait for the harness to report its URL</span>
+      <span class="hint" data-i18n="settings.bootTimeout.hint">how long to wait for the harness to report its URL</span>
 
-      <label for="restartLimit">Restart limit</label>
+      <label for="restartLimit" data-i18n="settings.restartLimit">Restart limit</label>
       <input id="restartLimit" type="number" min="0" max="100" />
-      <span class="hint">unexpected exits tolerated before the shell stops restarting</span>
+      <span class="hint" data-i18n="settings.restartLimit.hint">unexpected exits tolerated before the shell stops restarting</span>
 
-      <label for="restartWindowMs">Restart window (ms)</label>
+      <label for="restartWindowMs" data-i18n="settings.restartWindow">Restart window (ms)</label>
       <input id="restartWindowMs" type="number" min="1000" />
 
-      <label for="graceMs">Shutdown grace (ms)</label>
+      <label for="graceMs" data-i18n="settings.grace">Shutdown grace (ms)</label>
       <input id="graceMs" type="number" min="0" max="120000" />
-      <span class="hint">how long a quit waits for the child to die before giving up on confirming it</span>
+      <span class="hint" data-i18n="settings.grace.hint">how long a quit waits for the child to die before giving up on confirming it</span>
 
-      <label for="maxWindows">Workspace windows</label>
+      <label for="maxWindows" data-i18n="settings.maxWindows">Workspace windows</label>
       <input id="maxWindows" type="number" min="1" max="8" />
-      <span class="hint">how many workspaces may be open at once; each one is a whole harness</span>
+      <span class="hint" data-i18n="settings.maxWindows.hint">how many workspaces may be open at once; each one is a whole harness</span>
     </div>
 
-    <h2>Behaviour</h2>
+    <h2 data-i18n="settings.section.behaviour">Behaviour</h2>
     <div class="row">
-      <span>Closing the window</span>
-      <span class="check"><input id="closeToTray" type="checkbox" /><label for="closeToTray">hide to the tray instead of quitting</label></span>
+      <label for="language" data-i18n="settings.language">Language</label>
+      <select id="language">
+        <option value="auto" data-i18n="settings.language.auto">Auto (follow the system)</option>
+        <option value="zh" data-i18n="settings.language.zh">中文</option>
+        <option value="en" data-i18n="settings.language.en">English</option>
+      </select>
+      <span class="hint" data-i18n="settings.language.hint">Auto follows the system language; the interface language takes effect after a restart</span>
 
-      <label for="globalHotkey">Global shortcut</label>
-      <input id="globalHotkey" type="text" placeholder="Control+Alt+D" />
-      <span class="hint">shows or hides the window from anywhere; leave empty to disable</span>
+      <span data-i18n="settings.closeToTray">Closing the window</span>
+      <span class="check"><input id="closeToTray" type="checkbox" /><label for="closeToTray" data-i18n="settings.hideToTray">hide to the tray instead of quitting</label></span>
+
+      <label for="globalHotkey" data-i18n="settings.hotkey">Global shortcut</label>
+      <input id="globalHotkey" type="text" placeholder="Control+Alt+D" data-i18n-attr="placeholder:settings.hotkey.placeholder" />
+      <span class="hint" data-i18n="settings.hotkey.hint">shows or hides the window from anywhere; leave empty to disable</span>
     </div>
 
-    <h2>About</h2>
+    <h2 data-i18n="settings.section.about">About</h2>
     <div class="row">
-      <span>Versions</span><span class="value" id="versions">…</span>
-      <span>Data folder</span><span><button id="open-data">Open</button><span class="value" id="data-path"></span></span>
-      <span>Logs</span><span><button id="open-logs">Open</button></span>
+      <span data-i18n="settings.versions">Versions</span><span class="value" id="versions">…</span>
+      <span data-i18n="settings.dataFolder">Data folder</span><span><button id="open-data" data-i18n="settings.open">Open</button><span class="value" id="data-path"></span></span>
+      <span data-i18n="settings.logs">Logs</span><span><button id="open-logs" data-i18n="settings.open">Open</button></span>
     </div>
 
     <footer>
-      <button id="save" class="primary">Save</button>
-      <button id="restart">Restart harness</button>
-      <button id="defaults">Restore defaults</button>
-      <button id="diagnostics">Export diagnostics</button>
+      <button id="save" class="primary" data-i18n="settings.save">Save</button>
+      <button id="restart" data-i18n="settings.restartHarness">Restart harness</button>
+      <button id="defaults" data-i18n="settings.restoreDefaults">Restore defaults</button>
+      <button id="diagnostics" data-i18n="settings.exportDiagnostics">Export diagnostics</button>
       <span id="status"></span>
     </footer>
 
@@ -106,16 +115,78 @@
       const fields = ['port', 'bootTimeoutMs', 'restartLimit', 'restartWindowMs', 'graceMs', 'maxWindows'];
       const status = document.getElementById('status');
       let defaults = null;
+      let strings = {};
+      /** The last thing said on the status line, kept so it can be re-rendered. */
+      let state = { text: '', isError: false, params: null };
 
-      function say(text, isError) {
-        status.textContent = text;
-        status.classList.toggle('error', Boolean(isError));
+      /** One message, in the page's language, falling back to the key itself. */
+      function t(key, params) {
+        const template = strings[key] ?? key;
+        if (!params) return template;
+        return template.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
       }
+
+      /**
+       * One message for the status line.
+       *
+       * `text` is a message id when the main process produced it and a value it
+       * already rendered (its own failure `message`) otherwise; an unknown key
+       * renders as itself, which is how a raw key reached this line before.
+       * Falling back to the text is the best available answer when the
+       * dictionary never arrived: a plausible sentence beats `settings.saved`.
+       */
+      function message(text, params) {
+        const template = strings[text];
+        if (template === undefined) return params ? t(text, params) : text;
+        return t(text, params);
+      }
+
+      /** Render the status line, in whatever language the dictionary says. */
+      function renderStatus() {
+        status.textContent = message(state.text, state.params);
+        status.classList.toggle('error', Boolean(state.isError));
+      }
+
+      /**
+       * Say something on the status line.
+       * @param text - a message id, or text already rendered.
+       * @param isError - whether to render it as a failure.
+       * @param params - replacements for the message's `{name}` placeholders.
+       */
+      function say(text, isError, params) {
+        state = { text, isError: Boolean(isError), params: params ?? null };
+        renderStatus();
+      }
+
+      /**
+       * Apply a dictionary the main process pushed.
+       *
+       * Called both from `load()` and from the main process directly, because
+       * the main process only discovers the path of an IPC-less page after it
+       * has loaded and this page cannot fetch its own copy under the CSP.
+       */
+      window.__dshApplyStrings = function (next) {
+        strings = next || {};
+        if (strings.__lang) document.documentElement.lang = strings.__lang;
+        for (const node of document.querySelectorAll('[data-i18n]')) {
+          node.textContent = t(node.dataset.i18n);
+        }
+        for (const node of document.querySelectorAll('[data-i18n-attr]')) {
+          for (const pair of node.dataset.i18nAttr.split(',')) {
+            const [attribute, key] = pair.split(':');
+            if (attribute && key) node.setAttribute(attribute, t(key));
+          }
+        }
+        // A status already on screen belongs to the language that produced it,
+        // so it is re-rendered rather than left behind.
+        renderStatus();
+      };
 
       function fill(config) {
         for (const name of fields) document.getElementById(name).value = config[name];
         document.getElementById('closeToTray').checked = config.closeToTray === true;
         document.getElementById('globalHotkey').value = config.globalHotkey ?? '';
+        document.getElementById('language').value = config.language ?? 'auto';
       }
 
       function collect() {
@@ -128,43 +199,56 @@
         // only way to turn it off, and it is visible after a save.
         const hotkey = document.getElementById('globalHotkey').value.trim();
         values.globalHotkey = hotkey === '' ? null : hotkey;
+        values.language = document.getElementById('language').value;
         return values;
       }
 
       async function load() {
-        const state = await window.dshSettings.read();
-        defaults = state.defaults;
-        fill(state.config);
-        document.getElementById('workspace').textContent = state.workspace;
-        document.getElementById('data-path').textContent = ' ' + state.paths.data;
+        window.__dshApplyStrings(await window.dshSettings.strings());
+        const settings = await window.dshSettings.read();
+        defaults = settings.defaults;
+        fill(settings.config);
+        document.getElementById('workspace').textContent = settings.workspace;
+        document.getElementById('data-path').textContent = ' ' + settings.paths.data;
         document.getElementById('versions').textContent =
-          'DSH Desktop ' + state.versions.app + ' · Electron ' + state.versions.electron +
-          ' · Node ' + state.versions.node + ' · DSH ' + state.versions.dsh;
+          'DSH Desktop ' + settings.versions.app + ' · Electron ' + settings.versions.electron +
+          ' · Node ' + settings.versions.node + ' · DSH ' + settings.versions.dsh;
       }
 
       document.getElementById('save').addEventListener('click', async () => {
         const result = await window.dshSettings.save(collect());
+        // The main process pushed the new dictionary when the language changed,
+        // but the push is a separate call and can still be in flight — so the
+        // response carries one too. Without this, switching 中文 → English and
+        // pressing Save answered in Chinese while the rest of the page was
+        // already English.
+        if (result.strings) window.__dshApplyStrings(result.strings);
+        fill(result.config);
         if (result.problems.length > 0) {
-          say('Saved, but these were refused: ' + result.problems.join('; '), true);
-          fill(result.config);
+          say(t('settings.savedRefused', { problems: result.problems.join('; ') }), true);
+        } else if (result.restartRequired === true) {
+          say(t('settings.restartForLanguage'));
         } else {
-          say('Saved.');
+          say(t('settings.saved'));
         }
       });
 
       document.getElementById('defaults').addEventListener('click', () => {
-        if (defaults) { fill(defaults); say('Defaults loaded — press Save to keep them.'); }
+        if (defaults) { fill(defaults); say(t('settings.defaultsLoaded')); }
       });
 
       document.getElementById('choose').addEventListener('click', async () => {
         const chosen = await window.dshSettings.chooseWorkspace();
-        if (chosen) { document.getElementById('workspace').textContent = chosen; say('Restarting in ' + chosen + '…'); }
+        if (chosen) {
+          document.getElementById('workspace').textContent = chosen;
+          say(t('settings.choosingRestart', { workspace: chosen }));
+        }
       });
 
       document.getElementById('restart').addEventListener('click', async () => {
-        say('Restarting…');
+        say(t('settings.restarting'));
         await window.dshSettings.restartHarness();
-        say('Restarted.');
+        say(t('settings.restarted'));
       });
 
       document.getElementById('open-logs').addEventListener('click', () => window.dshSettings.openPath('logs'));
@@ -172,10 +256,10 @@
 
       document.getElementById('diagnostics').addEventListener('click', async () => {
         const written = await window.dshSettings.exportDiagnostics();
-        say(written === null ? 'Could not write the bundle — see the log.' : 'Written to ' + written);
+        say(written === null ? t('settings.diagnosticsFailed') : t('settings.diagnosticsWritten', { path: written }));
       });
 
-      load().catch((error) => say('Could not load settings: ' + error.message, true));
+      load().catch((error) => say(t('settings.loadFailed', { message: error.message }), true));
     </script>
   </body>
 </html>

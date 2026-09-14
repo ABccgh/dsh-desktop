@@ -85,7 +85,8 @@ Electron 44.3.0.
 | Path | Responsibility |
 | --- | --- |
 | `src/main.js` | Electron main: window, menu, tray, lifecycle, CLI switches, hotkey, jump list, page-mount diagnostic, own state |
-| `src/harness.mjs` | The child: spawn, env hygiene, readiness, restart policy, tree kill, `restartWith` |
+| `src/i18n.mjs` | Every string the shell shows (`zh`/`en`), the `{name}` substitution, and the resolver from a system language list to one of the two |
+| `src/harness.mjs` | The child: spawn, env hygiene, readiness, restart policy, tree kill, `restartWith`; its failures are message keys rendered through an injected translator |
 | `src/reap.mjs` | Identity-checked termination of a child left by a previous run |
 | `src/url-line.mjs` | The readiness-line contract, the chunk-reassembling scanner, both token redactors |
 | `src/args.mjs` | The child's argv — asserted exactly by a test |
@@ -103,7 +104,7 @@ Electron 44.3.0.
 | `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) |
 | `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
 | `electron-builder.yml` | The NSIS installer target — **configured, never built** |
-| `test/*.test.mjs` | 79 tests over the pure modules (`npm test`, ~0.3 s) |
+| `test/*.test.mjs` | 100 tests over the pure modules (`npm test`, ~0.35 s) |
 
 ## Current state
 
@@ -178,8 +179,8 @@ evidence, because two of them contradict advice that was given to this project b
   with no probe, so `npm test` ran a real PowerShell query and would have run `taskkill /PID /T /F`
   against whatever held the fixture's pid. It passed only because that pid was gone. The suite now
   runs 72 assertions in **0.3 s**; the old run cost **534 ms**, and the difference is the proof.
-  *(The runner counts tests, not assertions: 79 of them as of M4, still ~0.3 s. "Assertions" is this
-  file's older word for the same measurement.)*
+  *(The runner counts tests, not assertions: 79 of them as of M4, 100 as of M7, still ~0.35 s.
+  "Assertions" is this file's older word for the same measurement.)*
 - **Two reviewer findings were refuted by measurement, and are recorded so they are not re-chased:**
   the `console-message` handler is *not* broken on Electron 44 — the log contains real lines like
   `[page:warning] [connection] connection lost, retry #3 (…)`, so `event.message` and `event.level`
@@ -231,4 +232,79 @@ across the whole bundle. The narrow function stays because the log wants the nar
 **A shortcut that is re-created does not start from empty.** `WScript.Shell.CreateShortcut()` loads an
 existing `.lnk`, so `bin/shortcut.ps1` assigns `Arguments` unconditionally now — skipping the
 assignment when it was empty would have left a previous run's `-Workspace` silently in place.
+
+## M6, the Chinese interface, measured (2026-09-14)
+
+The user asked whether the whole desktop application could be Chinese and supplied a screenshot of its
+`Help` menu in English while the GUI behind it showed `工作区`. That screenshot is the finding: the
+window is two programs, and only one of them was localized.
+
+- **The web GUI was already Chinese, and had been all along.** The GUI resolves its language from
+  `navigator.languages`, and this shell's renderer reports `["zh-CN","zh-Hans-CN"]` (probed directly
+  in an Electron window, not inferred). `dsh-client-locale` ships `zh` and `en` and matches a browser
+  tag by exact id and then by **primary subtag** (`dsh-client-locale/lib/client.js:1344-1355`), so
+  `zh-CN` selects `zh`. No configuration, no plugin, and nothing to change in the shell: the GUI
+  follows the system locale, and the user's own `dsh web` on 3080 behaves the same way.
+- **The shell was entirely English, including the parts Electron claims to own.** Every string was
+  inline in `main.js`, `settings.html`, `loading.html`, `harness.mjs` and `paths.mjs`. Measured on
+  Electron 44.3.0: a `role:` menu item renders an **English** label on Windows (`Reload`,
+  `Actual Size`, `Zoom In`, `Toggle Full Screen`) whatever the app's locale, and a custom `label:`
+  overrides the text while the role keeps supplying the accelerator. Without that, "Chinese
+  interface" would have stopped at the `View` menu.
+- **The language is two decisions, not one.** Chromium reads `--lang` once, at process start, so the
+  shell appends it before `whenReady` — and only for an explicit `zh`/`en`, because `auto` exists to
+  *follow* the system and a switch would override the very thing it means. The shell's own surfaces
+  re-render immediately on a change; the GUI cannot, which is why the settings window says a restart
+  is required. Measured both directions end to end (`language: zh (setting auto, system zh)` and
+  `language: en (setting en, system zh)`).
+- **`config.language` is `auto | zh | en`, validated in `config.mjs` exactly like every other field.**
+  An unknown id is refused where the reason is visible rather than falling through to `auto` deep in
+  the translator.
+- **Nothing writes `$DSH_HOME/settings.yaml`, which is a decision and not an omission.** The GUI's own
+  preference mechanism is that file's `locale.preference`; the shell deliberately does not touch it,
+  because it is shared with the user's own running `dsh web` and because the shell writes nothing
+  under `DSH_HOME`. D-19 records the reasoning and what would reverse it.
+- **The acceptance ladder grew from 12 checks to 19**, and one of the new ones is the falsification
+  that matters: a **second launch** with `--language en` on a `zh` system must resolve to `en`.
+  `npm run smoke:dev` and `npm run smoke` both pass 19/19.
+- **A pre-existing defect the ladder found by being run repeatedly: the cookie jar grew without bound
+  and eventually made the window blank.** The GUI's server names its auth cookie after the launch
+  authority (`dsh-auth-<43 chars>`), and the authority changes every launch because the port does — so
+  each run *added* a cookie rather than replacing one. Measured at **70 rows**: the token exchange
+  answered **HTTP 431**, the interface mounted nothing, and the only trace was `interface mounted:
+  false` in the log with no error of the shell's own. The shell now sweeps those cookies at startup
+  (D-27); the jar holds one and stays at one across repeated launches. The lesson is about evidence as
+  much as code: **this could only appear after enough runs, so a single green ladder is not evidence
+  that the ladder is sound.**
+- **An explicit language choice steers the GUI too, and this file said otherwise until it was
+  measured.** It used to claim the `--lang` switch "changes nothing about the GUI" because the GUI's
+  harness is a separate process. False, and corrected here: the GUI is a *renderer of this Electron
+  instance*, so `app.commandLine.appendSwitch('lang','en-US')` moves `navigator.languages` to
+  `en-US | en-US,zh-Hans-CN` in the renderer, and the GUI's own resolver walks exactly that list
+  (`dsh-client-locale/lib/client.js:1344-1355`), with no `locale.preference` in `settings.yaml` to
+  override it. So `language: 'en'` gives an English shell **and** an English GUI after a restart;
+  `auto` is the setting that leaves the GUI to the system. The smoke check asserts only the log line,
+  so it could never have caught this — a reminder that a check "proving" a negative needs to look at
+  the thing being denied. D-24 supersedes D-22 on this point.
+
+**Four defects in the verification itself, worth keeping because each produced a confident wrong
+reading rather than an error:**
+
+- Two `executeJavaScript` probes failed with "An object could not be cloned" because they returned a
+  **Promise** and an **array of DOM nodes**. The fix is primitive returns — the probe pages now write
+  a JSON string into `document.title`.
+- A `^language:` regex never matched a log line, because every line is prefixed with a **local
+  timestamp**. Three consecutive runs reported "no language line" for logs that plainly carried one;
+  the pattern now tolerates the prefix.
+- The resolved-language line named `config.language` rather than the **effective** choice, so a forced
+  launch logged `setting auto` while behaving as `en` — a log that described something other than what
+  happened. `smoke.mjs` caught it, which is the only reason it was found.
+- Reading the log immediately after the readiness line is a **race**: the file is appended line by line
+  by another process, so the language line can be a moment behind. The check now retries with a bound.
+
+**A probe left processes behind, and cleaning them up is part of the work.** Two Electron probe groups
+and one real launch were still running after their harnesses had been started; they were killed by
+**exact pid with `taskkill /T /F`**, never by name, and the session's own process (`node.exe` behind
+3080) was verified untouched afterwards. The lesson worth carrying: a launch that holds the
+single-instance lock can be a *real* launch, so before starting one check what is already running.
 

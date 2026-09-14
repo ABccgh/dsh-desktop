@@ -9,6 +9,46 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join } from 'node:path';
 
+import { createTranslator } from './i18n.mjs';
+
+/**
+ * A translator with the English table, used when a caller injects none.
+ *
+ * These failures are shown to the user (the startup path puts the message on
+ * the loading page), which is why they are translated at all — and why the
+ * default stays English rather than empty.
+ */
+const defaultMessage = createTranslator('en');
+
+/**
+ * Translate a message for a caller that may not have supplied a translator.
+ * @param t - the injected translator, if any.
+ * @param key - the message key.
+ * @param params - its replacements.
+ * @returns the rendered message.
+ */
+function say(t, key, params) {
+  return (typeof t === 'function' ? t : defaultMessage)(key, params);
+}
+
+/**
+ * The message keys this module can raise, so a caller can match one without
+ * copying an English sentence and a test can assert the wording landed.
+ */
+export const INSTALL_MESSAGE_KEYS = Object.freeze({
+  notFound: 'install.notFound',
+  noManifest: 'install.noManifest',
+  badManifest: 'install.badManifest',
+  noBin: 'install.noBin',
+  binMissing: 'install.binMissing',
+});
+
+/** The one key `resolveNodeExe` can raise. */
+export const NODE_MESSAGE_KEY = 'node.notFound';
+
+/** The `DSH_NODE` override pointing at nothing. */
+export const DSH_NODE_MESSAGE_KEY = 'node.dshNodeMissing';
+
 /**
  * The Harness home.
  *
@@ -38,37 +78,35 @@ export function resolveDshHome(env = process.env) {
  * instead of pinning a hash directory.
  *
  * @param dshHome - the Harness home.
+ * @param t - optional translator; defaults to the English table.
  * @returns the resolved installation: directory, version, and the CLI entry path.
  * @throws when the junction, the manifest, its `bin.dsh`, or that file is absent.
  */
-export function resolveInstallAnchor(dshHome) {
+export function resolveInstallAnchor(dshHome, t) {
   const link = join(dshHome, 'profiles', 'node_modules', '@deepseek-ai', 'dsh');
   if (!existsSync(link)) {
-    throw new Error(
-      `DSH installation not found at ${link}. Install or reinstall DeepSeek Harness ` +
-        `(the \`dsh\` command), or set DSH_HOME if it lives elsewhere.`,
-    );
+    throw new Error(say(t, INSTALL_MESSAGE_KEYS.notFound, { link }));
   }
   const dir = realpathSync(link);
 
   const manifestPath = join(dir, 'package.json');
   if (!existsSync(manifestPath)) {
-    throw new Error(`DSH installation at ${dir} has no package.json (resolved from ${link}).`);
+    throw new Error(say(t, INSTALL_MESSAGE_KEYS.noManifest, { dir, link }));
   }
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   } catch (error) {
-    throw new Error(`DSH installation at ${dir} has an unreadable package.json: ${error.message}`);
+    throw new Error(say(t, INSTALL_MESSAGE_KEYS.badManifest, { dir, message: error.message }));
   }
 
   const relative = manifest?.bin?.dsh;
   if (typeof relative !== 'string' || relative === '') {
-    throw new Error(`DSH package at ${manifestPath} declares no bin.dsh entry.`);
+    throw new Error(say(t, INSTALL_MESSAGE_KEYS.noBin, { manifest: manifestPath }));
   }
   const binPath = join(dir, relative);
   if (!existsSync(binPath)) {
-    throw new Error(`DSH CLI entry ${binPath} (from bin.dsh) does not exist.`);
+    throw new Error(say(t, INSTALL_MESSAGE_KEYS.binMissing, { binPath }));
   }
 
   return {
@@ -128,13 +166,14 @@ export function workspaceFromArgv(argv, options = {}) {
  * `docs/agent-notes/PROJECT.md` for the measurements.
  *
  * @param env - an environment mapping; defaults to this process's.
+ * @param t - optional translator; defaults to the English table.
  * @returns the Node executable path.
  * @throws when neither `DSH_NODE` nor a PATH entry resolves.
  */
-export function resolveNodeExe(env = process.env) {
+export function resolveNodeExe(env = process.env, t) {
   const override = env.DSH_NODE;
   if (typeof override === 'string' && override.trim() !== '') {
-    if (!existsSync(override)) throw new Error(`DSH_NODE is set to ${override}, which does not exist.`);
+    if (!existsSync(override)) throw new Error(say(t, DSH_NODE_MESSAGE_KEY, { override }));
     return override;
   }
 
@@ -147,8 +186,13 @@ export function resolveNodeExe(env = process.env) {
     tried.push(candidate);
     if (existsSync(candidate)) return candidate;
   }
+  // English picks a plural with `{plural}` because the noun changes; Chinese
+  // passes an empty string, since it has no plural form to agree with.
   throw new Error(
-    `Node.js was not found on PATH (looked for ${executable} in ${tried.length} ` +
-      `director${tried.length === 1 ? 'y' : 'ies'}). Install Node.js, or set DSH_NODE to its full path.`,
+    say(t, NODE_MESSAGE_KEY, {
+      executable,
+      count: tried.length,
+      plural: tried.length === 1 ? 'y' : 'ies',
+    }),
   );
 }

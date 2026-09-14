@@ -5,20 +5,59 @@
 **DSH Desktop** at `D:\dsh-desktop` — a Windows desktop shell for DeepSeek Harness: one window
 showing the user's own GUI, no browser chrome, no terminal, no server to start by hand.
 
-The current work is the approved six-milestone improvement plan. **M1, M2, M4 and M5 are complete and
-verified; M3 is not started and the NSIS installer half of M5 has never been run.**
+The current work is the approved six-milestone improvement plan, plus a milestone the user asked for
+afterwards. **M1, M2, M4, M5 and M6 (the Chinese interface) are complete and verified; M3 is not
+started and the NSIS installer half of M5 has never been run.**
 
 | Milestone | State |
 | --- | --- |
 | **M1** defects A1–A14, test hardening, `geometry`/`state` extracted | **done, verified** |
 | **M2** settings window (F1) | **done, verified** |
-| **M6 (part)** `bin/smoke.mjs` | **done, 12/12 checks pass** |
+| **M6 (part)** `bin/smoke.mjs` | **done, 19/19 checks pass** |
 | **M4** CLI, hotkey, jump list, DSH version change, diagnostics export | **done, verified** |
 | **M5** exe icon + version | **done, verified** (`exe ProductName reads back as "DSH Desktop"`) |
 | **M5** NSIS installer | **config written, NEVER RUN** — `npm run installer` exists but has not been executed, so the NSIS toolchain and the produced installer are both unproven |
 | **M3** multi-window | **NOT STARTED, NOT DESIGNED** — the largest item (973 lines, 113 references to one `win`); see below |
+| **M7** the Chinese interface (`src/i18n.mjs`, a language switch, `--language`) | **done, verified end to end** — 100 tests, **19/19 on the packaged build** (`npm run smoke`) and 19/19 from source; reviewed adversarially, and the eight findings that survived re-checking are fixed — see D-21…D-26 |
+
+## M7, after the adversarial review
+
+An independent reviewer was given the change and told not to trust the author's claims. It returned
+**unsound**: three high findings, each with an executed counterexample. All three were reproduced here
+before being fixed, and the fixes were re-measured on the real pages rather than argued.
+
+| Finding | Verified how | Fixed |
+| --- | --- | --- |
+| The main window was never given a dictionary, so the failure prefix and `<html lang>` stayed English | `pushStrings()` called only from `applyLanguage` and the *settings* window's load | `pushStrings()` before `pushStatus()` in the main window's `did-finish-load` |
+| A dictionary push replaced a live failure with "Starting…" | `#status` carried `data-i18n="page.starting"` and the apply hook wrote over it | the hook skips `#status` and re-renders it from remembered state |
+| The settings window's title bar stayed English | a page `<title>` beats `BrowserWindow`'s `title:` (measured: `win="DSH Desktop — Settings"` from a window created with `FROM-CONSTRUCTOR`) | `page-title-updated` prevented, title written by the shell (D-25) |
+| The jump list kept the old language | `applyLanguage` never called `refreshJumpList()` | added |
+| Validator notes rendered English inside a Chinese sentence | `normalizeConfig` produced finished sentences | notes are structured; `problemMessage` renders them (in the language now in effect) |
+| **`--lang` does affect the GUI** — the docs said it did not | a probe measured `NAVIGATOR=en-US \| en-US,zh-Hans-CN` in a real renderer | D-24 supersedes D-22; `PROJECT.md` corrected |
+| `--version` printed two English lines | — | translated (`version.bundled`, `version.nodeNote`) |
+| `DSH_NODE`, `'not found'`, and raw keys could reach the screen | — | all three translated or removed |
+
+**What the review cost, and why it was worth it:** its central finding was a *documentation* error
+that no test could have caught — a claim marked measured, resting on reasoning rather than a
+measurement. It also showed the smoke ladder's language check can only ever prove the shell's half,
+which is now written down next to the check itself.
 | **M6 (rest)** docs for M3/M5 | not started |
 | **Publish** this repository to GitHub | **done** — `github.com/ABccgh/dsh-desktop`, `main` at `42b8c99`, remote tree equal to the local `HEAD^{tree}`; see D-19 |
+
+## M7, the Chinese interface, as verified
+
+Asked for as "可以让《dsh desktop》实现全中文吗", and the screenshot that came with it decided the
+scope: the `Help` menu was English while the GUI behind it showed `工作区`.
+
+| Item | Evidence |
+| --- | --- |
+| The GUI was already Chinese | Its resolver matches `navigator.languages` by primary subtag, and this shell's renderer reports `["zh-CN","zh-Hans-CN"]` — probed in a real Electron window, not inferred |
+| The shell was entirely English | Every string was inline in five files; `role:` menu items render English labels on Windows whatever the locale |
+| A dictionary that cannot go stale quietly | A paired test greps `main.js`/`harness.mjs` for `t('…')` and fails when either language is missing a key; it also checks that no message needs a value its call site never passes |
+| Both pages in both languages | Rendered in an Electron window and inspected: 37/37 `data-i18n` nodes resolved, `lang=zh-CN`, form fields filled, `--lang`-style injection applied |
+| The language switch works both directions | `language: zh (setting auto, system zh)` and `language: en (setting en, system zh)` — the second is the falsification: a forced language really overrides the system's |
+| The CLI follows the language | `--help` prints Chinese under `auto` on this machine and English under `--language en` |
+| Nothing was touched under `$DSH_HOME` | The GUI's own preference file is deliberately **not** written; the user's `dsh web` on 3080 was the same pid before and after every launch (D-23) |
 
 ## Open gap found while publishing
 

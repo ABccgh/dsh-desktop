@@ -57,11 +57,24 @@ whose rule 7 is "this repo ships presets and nothing else". Do not move it in.
   child, which its supervisor then correctly restarted. When a launch does nothing, list **both**
   process names before concluding anything — and prefer `npm run smoke`, which drives a real launch
   and fails loudly rather than quietly reusing someone else's window.
+- **Every user-visible string goes through `src/i18n.mjs`, and a `role:` menu item is not exempt.**
+  Measured on Electron 44.3.0: `{ role: 'reload' }` and its six siblings render English labels on
+  Windows no matter what language the app runs in, so each one carries an explicit `label:` here —
+  the role still supplies the accelerator. The paired test in `test/i18n.test.mjs` greps the
+  rendered modules for `t('…')` calls and fails when either dictionary is missing one, which is the
+  only thing that catches a new English sentence before it reaches a Chinese screen.
+- **The interface language is decided once per process, and it is two decisions.** Chromium reads
+  `--lang` at startup, so `main.js` appends it before `whenReady` — and only for an explicit `zh`/`en`,
+  because `auto` must leave the system locale alone. The GUI inside the window resolves its own
+  language from `navigator.languages` (measured here: `["zh-CN","zh-Hans-CN"]`, which the shipped
+  client matches by primary subtag), which is why a Chinese system gets a Chinese GUI with no
+  configuration at all. The shell's own surfaces re-render immediately on a language change; the GUI
+  cannot, so the settings window says a restart is needed.
 
 ## Commands
 
 ```powershell
-npm test            # node --test test/ — 79 tests, ~0.3 s, no real process touched
+npm test            # node --test test/ — 100 tests, ~0.4 s, no real process touched
 npm start           # electron .  (add -- "D:\some\project" to choose the workspace)
 npm run icon        # build/icon.png + build/icon.ico
 npm run pack        # dist\DSH Desktop\DSH Desktop.exe — portable, no extra toolchain
@@ -77,6 +90,7 @@ npm run smoke:dev   # the same ladder against `electron .`
 | Path | Responsibility |
 | --- | --- |
 | `src/main.js` | Electron main: window, menu, tray, lifecycle, CLI switches, hotkey, jump list, own state under `userData` |
+| `src/i18n.mjs` | Every string the shell shows, in `zh` and `en`, plus the resolver that turns a system language list into one of them |
 | `src/harness.mjs` | The child: spawn, readiness, restart policy, tree-kill, environment hygiene |
 | `src/reap.mjs` | Identifying and terminating a child left by a previous run; the only kill of a process we did not spawn |
 | `src/url-line.mjs` | The readiness-line contract, the chunk-reassembling scanner, and both token redactors |

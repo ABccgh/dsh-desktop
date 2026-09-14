@@ -19,10 +19,21 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSyn
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DEFAULT_CONFIG, normalizeConfig } from './config.mjs';
+import { DEFAULT_CONFIG, normalizeConfig, problemMessage } from './config.mjs';
 import { buildDiagnostics } from './diagnostics.mjs';
 import { chooseGeometry } from './geometry.mjs';
 import { HarnessSupervisor } from './harness.mjs';
+import {
+  APP_NAME,
+  LANGUAGES,
+  MESSAGE_IDS,
+  chromiumLanguage,
+  createTranslator,
+  detectSystemLanguage,
+  htmlLanguage,
+  languageOf,
+  messagesFor,
+} from './i18n.mjs';
 import { resolveDshHome, resolveInstallAnchor, resolveNodeExe, workspaceFromArgv } from './paths.mjs';
 import { reapStaleChild } from './reap.mjs';
 import { normalizeState } from './state.mjs';
@@ -30,12 +41,121 @@ import { isWebUrl, redactToken, truncateForLog } from './url-line.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-/** Taskbar/notification identity, and the app's own name. */
+/** Taskbar/notification identity. The app's own name is `i18n.mjs`'s APP_NAME. */
 const APP_ID = 'com.dsh.desktop';
-const APP_NAME = 'DSH Desktop';
+
+/** The persistent window partition: the GUI's own localStorage lives here. */
+const PARTITION = 'persist:dsh-desktop';
+
+/**
+ * The cookie the GUI's server mints, whose **name** carries the authority.
+ *
+ * Measured: 70 of them had accumulated in the persistent partition, one per
+ * launch, none ever cleaned up — because the port changes every launch, so the
+ * authority changes with it and each one is a new cookie name rather than a
+ * replacement. Past a few dozen, the request headers exceed the harness's own
+ * limit: the token exchange answers **HTTP 431**, the window mounts nothing, and
+ * the app looks broken with no error of its own to report.
+ */
+const AUTH_COOKIE_PREFIX = 'dsh-auth-';
+
+/**
+ * Drop the launch-token cookies left by earlier runs.
+ *
+ * Deliberately narrow: only cookies the previous launches minted, only for
+ * loopback, and only at startup — before this run's token exists, so nothing
+ * live can be removed. The partition itself is kept, because the GUI's
+ * localStorage (theme, layout) lives in it and that is the whole reason the
+ * persistent partition exists.
+ *
+ * @returns a promise settling once the stale cookies are gone.
+ */
+async function clearStaleAuthCookies() {
+  try {
+    const { session } = await import('electron');
+    const store = session.fromPartition(PARTITION).cookies;
+    const jar = await store.get({ url: 'http://127.0.0.1/' });
+    const stale = jar.filter((cookie) => cookie.name.startsWith(AUTH_COOKIE_PREFIX));
+    if (stale.length === 0) {
+      log('no stale launch-token cookies to clear');
+      return;
+    }
+    await Promise.all(
+      stale.map((cookie) => {
+        // A cookie's path can be empty, and `http://127.0.0.1` with no slash is
+        // not a URL `cookies.remove` accepts — measured as the difference
+        // between clearing the jar and clearing nothing.
+        const path = typeof cookie.path === 'string' && cookie.path !== '' ? cookie.path : '/';
+        const url = `${cookie.secure ? 'https' : 'http'}://127.0.0.1${path.startsWith('/') ? path : `/${path}`}`;
+        return store.remove(url, cookie.name).catch((error) => log(`could not remove ${cookie.name}: ${error.message}`));
+      }),
+    );
+    log(`cleared ${stale.length} stale launch-token cookie(s) from a previous run`);
+  } catch (error) {
+    // The window still works with a clean jar-less partition; never fatal.
+    log(`could not clear stale launch-token cookies: ${error.message}`);
+  }
+}
 
 app.setAppUserModelId(APP_ID);
 app.setName(APP_NAME);
+
+// ---------------------------------------------------------------------------
+// Interface language
+// ---------------------------------------------------------------------------
+//
+// Read as early as the module body allows: Chromium takes its interface language
+// from `--lang`, which must be appended before `app.whenReady()` fires, and the
+// settings a user saved must be in hand before that decision is made.
+//
+// `DSH_LANG` is an environment override for the "does a forced language really
+// work" experiment; `--language <id>` is the same thing from the command line,
+// and it is read from `process.argv` directly because it has to answer before
+// the switches below are defined.
+
+/** The system's own languages, in the order the user listed them. */
+const SYSTEM_LANGUAGES = (() => {
+  try {
+    const preferred = app.getPreferredSystemLanguages();
+    if (Array.isArray(preferred) && preferred.length > 0) return preferred;
+  } catch {
+    // Older Electron, or a platform without the API.
+  }
+  try {
+    return [Intl.DateTimeFormat().resolvedOptions().locale];
+  } catch {
+    return [];
+  }
+})();
+
+/** What `auto` means on this machine. */
+const DETECTED_LANGUAGE = detectSystemLanguage(SYSTEM_LANGUAGES);
+
+/**
+ * Is this one of the languages the settings window can show as chosen?
+ * @param value - the candidate.
+ * @returns true for `auto`, `zh` or `en`.
+ */
+function isLanguageChoice(value) {
+  return typeof value === 'string' && LANGUAGES.includes(value);
+}
+
+/**
+ * The language named on the command line, before the switches are defined.
+ * @returns `auto`, `zh`, `en`, or null when none was named usably.
+ */
+function requestedLanguageFromArgv() {
+  const argv = process.argv.slice(1);
+  const direct = argv.find((argument) => argument.startsWith('--language='));
+  if (direct !== undefined) {
+    const value = direct.slice('--language='.length);
+    return isLanguageChoice(value) ? value : null;
+  }
+  const flag = argv.indexOf('--language');
+  if (flag === -1) return null;
+  const value = argv[flag + 1];
+  return isLanguageChoice(value) ? value : null;
+}
 
 // An EPIPE on stdout arrives as an 'error' event, which is unhandled by default
 // and fatal. A packaged GUI app with no console must simply not care.
@@ -50,21 +170,18 @@ process.stderr.on('error', () => {});
 // harness: `--version` is the first thing a support request asks for, and it has
 // to answer even while another copy is already running.
 
-const USAGE = `${APP_NAME} — a desktop shell for DeepSeek Harness.
-
-Usage:
-  DSH Desktop [folder]              open with that folder as the harness workspace
-  DSH Desktop --workspace <folder>  the same, spelled out
-  DSH Desktop --settings            open with the settings window showing
-  DSH Desktop --version             print versions and exit
-  DSH Desktop --help                print this and exit
-
-Closing the window quits unless closeToTray is set in
-%APPDATA%\\DSH Desktop\\config.json.
-`;
-
 /** The switches this shell owns, from argv. Electron's own are filtered out. */
 const cliSwitches = process.argv.slice(1).filter((argument) => argument.startsWith('-'));
+
+/**
+ * The language the CLI text below is written in.
+ *
+ * Only `--language` and `DSH_LANG` can reach here: the settings file is read
+ * further down, and the command line is what a script can actually set.
+ */
+const cliLanguageChoice = requestedLanguageFromArgv() ?? process.env.DSH_LANG ?? 'auto';
+const cliLanguage = languageOf(cliLanguageChoice, DETECTED_LANGUAGE);
+const cliT = createTranslator(cliLanguage);
 
 if (cliSwitches.includes('--version') || cliSwitches.includes('-V')) {
   process.stdout.write(`${APP_NAME} ${app.getVersion()}\n`);
@@ -72,14 +189,18 @@ if (cliSwitches.includes('--version') || cliSwitches.includes('-V')) {
   // runs on the SYSTEM Node, which is a different version, and an unlabelled
   // "Node x.y" here would invite exactly the wrong conclusion.
   process.stdout.write(
-    `bundled with: Electron ${process.versions.electron} (its Node ${process.versions.node}, Chromium ${process.versions.chrome})\n`,
+    cliT('version.bundled', {
+      electron: process.versions.electron,
+      node: process.versions.node,
+      chrome: process.versions.chrome,
+    }),
   );
-  process.stdout.write(`harness runs on the Node found on PATH; see --settings for the resolved path\n`);
+  process.stdout.write(cliT('version.nodeNote'));
   process.exit(0);
 }
 
 if (cliSwitches.includes('--help') || cliSwitches.includes('-h')) {
-  process.stdout.write(USAGE);
+  process.stdout.write(cliT('usage.body'));
   process.exit(0);
 }
 
@@ -102,7 +223,7 @@ let quitting = false;
 /** The settings window, when one is open. */
 let settingsWin = null;
 /** The DSH version this shell actually booted, for the settings window. */
-let dshVersion = 'not found';
+let dshVersion = '';
 /** Where the harness installation resolved to, for the diagnostics bundle. */
 let anchorInfo = {};
 /** The Node executable the child runs on, for the diagnostics bundle. */
@@ -228,13 +349,109 @@ if (!existsSync(CONFIG_PATH)) {
   log(`wrote a default config to ${CONFIG_PATH}`);
 }
 
-const config = normalizeConfig(readJson(CONFIG_PATH, undefined), (problem) => log(`config: ${problem}`));
+const config = normalizeConfig(readJson(CONFIG_PATH, undefined), (problem) => log(`config: ${problemMessage(problem)}`));
 // Object-or-nothing: a bare `null` in this file used to throw while the module
 // was still evaluating, before a window existed to report it. See state.mjs.
 let state = normalizeState(readJson(STATE_PATH, undefined), (problem) => log(`state: ${problem}`));
 log(`${APP_NAME} starting. userData=${USER_DATA}`);
 log(`log file: ${logPath}`);
 log(`config: ${JSON.stringify(config)}`);
+
+// The interface language, decided here: late enough to see the saved settings,
+// early enough that `--lang` is appended before Chromium reads its switches.
+// Precedence is command line, then environment, then the saved setting. `auto`
+// means "follow the system" wherever it appears — an explicit `auto` on the
+// command line does not fall through to the saved value.
+let effectiveLanguageChoice = requestedLanguageFromArgv() ?? process.env.DSH_LANG ?? config.language;
+let shellLanguage = languageOf(effectiveLanguageChoice, DETECTED_LANGUAGE);
+let t = createTranslator(shellLanguage);
+
+/**
+ * Tell Chromium which interface language to use, or leave it alone.
+ *
+ * `auto` appends nothing on purpose: the GUI resolves its own language from
+ * `navigator.languages`, which already follows the system, so a switch here
+ * would override the very thing the user asked to follow.
+ *
+ * @returns nothing.
+ */
+function promptChromium() {
+  const tag = chromiumLanguage(effectiveLanguageChoice, shellLanguage);
+  if (tag === null) {
+    log('language: auto — Chromium keeps the system locale, so the GUI follows the system too');
+    return;
+  }
+  app.commandLine.appendSwitch('lang', tag);
+  log(`language: prompting Chromium with ${tag}`);
+}
+
+promptChromium();
+// `effectiveLanguageChoice`, not `config.language`: an override on the command
+// line is the setting that actually took effect, and logging the stored one here
+// made a forced launch read as if it had been ignored.
+log(`language: ${shellLanguage} (setting ${effectiveLanguageChoice}, system ${DETECTED_LANGUAGE})`);
+
+/**
+ * Switch the language the shell itself renders, without touching Chromium.
+ *
+ * Deliberately does not call `promptChromium`: that switch is read once at
+ * process start, so appending it here would change nothing while making the log
+ * claim it had. The shell's own surfaces re-render immediately; an explicit
+ * language change still needs a restart for the GUI, and the settings window
+ * says so.
+ *
+ * @param chosen - `auto`, `zh` or `en` as stored in the config.
+ * @returns the resolved language now in effect.
+ */
+function applyLanguage(chosen) {
+  effectiveLanguageChoice = chosen;
+  shellLanguage = languageOf(chosen, DETECTED_LANGUAGE);
+  t = createTranslator(shellLanguage);
+  log(`language: ${shellLanguage} (setting ${chosen}, system ${DETECTED_LANGUAGE})`);
+  buildMenu();
+  buildTray();
+  refreshJumpList();
+  if (win !== null && !win.isDestroyed()) win.setTitle(t('window.title'));
+  if (settingsWin !== null && !settingsWin.isDestroyed()) settingsWin.setTitle(t('window.settings'));
+  pushStrings();
+  return shellLanguage;
+}
+
+/** The string table the renderer pages receive, as JSON. */
+function stringsJson() {
+  return JSON.stringify({
+    ...messagesFor(shellLanguage),
+    __lang: htmlLanguage(shellLanguage),
+    _title: t('window.title'),
+  });
+}
+
+/**
+ * Send the current strings to every open page, and name the window.
+ *
+ * These pages are loaded from `file://` with no preload (the sandboxed settings
+ * bridge is the one exception), so the dictionary is injected rather than
+ * fetched — the same mechanism as `window.__dshSetStatus`. The native window
+ * title is set here too: `page-title-updated` is prevented so that the hosted
+ * GUI cannot rename the window, which also means a page's own `<title>` never
+ * reaches the title bar and the shell has to say it in the reader's language
+ * itself.
+ *
+ * @returns nothing.
+ */
+function pushStrings() {
+  const payload = stringsJson();
+  // The status text is resolved here, so a language change has to re-render it
+  // rather than only replace the static copy around it.
+  const status = pendingStatus === null ? 'null' : JSON.stringify(pendingStatus);
+  for (const target of [win, settingsWin]) {
+    if (target === null || target.isDestroyed()) continue;
+    const script =
+      `window.__dshApplyStrings && window.__dshApplyStrings(${payload});` +
+      `window.__dshSetStatus && window.__dshSetStatus(${status});`;
+    target.webContents.executeJavaScript(script, true).catch(() => {});
+  }
+}
 
 /**
  * Pick the directory the harness child runs in.
@@ -298,12 +515,19 @@ function restoreGeometry() {
 
 /**
  * Send a status update to the loading page, or hold it until the page exists.
- * @param text - the message to show.
+ *
+ * @param text - a message id, or text already resolved.
  * @param isError - whether to render it as a failure.
+ * @param params - replacements for the message's `{name}` placeholders.
  * @returns nothing.
  */
-function showStatus(text, isError = false) {
-  pendingStatus = { text, isError };
+function showStatus(text, isError = false, params = null) {
+  // `key` is what lets the page re-render the sentence after a language switch
+  // rather than leaving it in the language it was pushed under. A supervisor's
+  // failure has no id — the page keeps the text it was given and passes it
+  // through unchanged — so the key is set only when `text` really is one.
+  const key = typeof text === 'string' && MESSAGE_IDS.includes(text) ? text : null;
+  pendingStatus = { text, isError, params, key };
   pushStatus();
 }
 
@@ -315,7 +539,10 @@ function pushStatus() {
   if (pendingStatus === null || win === null || win.isDestroyed()) return;
   const payload = JSON.stringify(pendingStatus);
   win.webContents
-    .executeJavaScript(`window.__dshSetStatus && window.__dshSetStatus(${payload}.text, ${payload}.isError);`, true)
+    .executeJavaScript(
+      `window.__dshSetStatus && window.__dshSetStatus(${payload}.text, ${payload}.isError, ${payload}.params, ${payload}.key);`,
+      true,
+    )
     .catch(() => {});
 }
 
@@ -344,11 +571,7 @@ async function reportPageState() {
     );
     log(`loaded: ${new URL(currentUrl).origin} — interface mounted: ${String(mounted)}`);
     if (mounted !== true) {
-      showStatus(
-        'The harness is running, but its interface did not render. ' +
-          'The log has the details (Help → Show Log Folder).',
-        true,
-      );
+      showStatus(t('status.notRendered'), true);
     }
   } catch (error) {
     log(`could not inspect the loaded page: ${error.message}`);
@@ -448,9 +671,9 @@ async function surfaceFailure(message) {
     const { response } = await dialog.showMessageBox(win, {
       type: 'error',
       title: APP_NAME,
-      message: 'DeepSeek Harness stopped',
+      message: t('dialog.stopped'),
       detail: message,
-      buttons: ['Restart DSH', 'Show Logs', 'Dismiss'],
+      buttons: [t('dialog.restart'), t('dialog.showLogs'), t('dialog.dismiss')],
       defaultId: 0,
       cancelId: 2,
       noLink: true,
@@ -474,7 +697,7 @@ function createWindow() {
     minHeight: 520,
     show: false,
     backgroundColor: '#101418',
-    title: APP_NAME,
+    title: t('window.title'),
     icon: existsSync(ICON_PNG) ? ICON_PNG : undefined,
     webPreferences: {
       contextIsolation: true,
@@ -482,14 +705,26 @@ function createWindow() {
       sandbox: true,
       // A persistent partition, so the GUI's own localStorage (theme, layout)
       // survives a restart. The auth cookie is authority-bound and the port
-      // changes each launch, so a stale cookie is never sent to the new server.
-      partition: 'persist:dsh-desktop',
+      // changes each launch, so a stale cookie is never sent to the new server —
+      // and the stale ones are swept at startup, which is what keeps that true
+      // once a few dozen launches have each minted their own (see APP_ID's
+      // neighbour, `clearStaleAuthCookies`).
+      partition: PARTITION,
     },
   });
 
   win.once('ready-to-show', () => win?.show());
+  // The window keeps the shell's own name. Measured: without this the title bar
+  // follows the hosted page — which is the harness GUI, and declares itself
+  // "DeepSeek Harness" — so the shell named the window in the language it had
+  // chosen only until the GUI loaded. Prevented here and set from the main
+  // process instead, where the language is known.
   win.on('page-title-updated', (event) => event.preventDefault());
   win.webContents.on('did-finish-load', () => {
+    // Strings first: the failure hint and the document language come from the
+    // dictionary, and a status pushed before it arrives would render its
+    // fallback English.
+    pushStrings();
     pushStatus();
     void reportPageState();
   });
@@ -526,7 +761,7 @@ function createWindow() {
   });
   win.webContents.on('render-process-gone', (_event, details) => {
     log(`the interface process exited: reason=${details.reason} exitCode=${String(details.exitCode)}`);
-    showStatus('The interface stopped unexpectedly. The log has the details (Help → Show Log Folder).', true);
+    showStatus(t('status.interfaceStopped'), true);
   });
 
   // Nothing in this app should open a second window: send links to the user's
@@ -576,7 +811,7 @@ function createWindow() {
     win.loadURL(currentUrl).catch((error) => log(`could not reopen the harness URL: ${error.message}`));
   } else {
     win.loadFile(join(HERE, 'loading.html')).catch((error) => log(`could not load the loading page: ${error.message}`));
-    showStatus('Starting DeepSeek Harness…');
+    showStatus(t('status.starting'));
   }
   return win;
 }
@@ -621,7 +856,7 @@ function saveWindowGeometry() {
 async function chooseWorkspace() {
   if (win === null) return;
   const result = await dialog.showOpenDialog(win, {
-    title: 'Choose the workspace for DSH Desktop',
+    title: t('dialog.chooseWorkspace'),
     properties: ['openDirectory', 'createDirectory'],
   });
   if (result.canceled || result.filePaths.length === 0) return;
@@ -650,7 +885,7 @@ async function switchWorkspace(chosen) {
   currentUrl = null;
   currentPort = null;
   harnessPageLoaded = false;
-  showStatus(`Restarting DeepSeek Harness in ${chosen}…`);
+  showStatus(t('status.restartingWorkspace', { workspace: chosen }));
   if (supervisor !== null) await supervisor.restartWith(chosen);
 }
 
@@ -659,77 +894,80 @@ async function switchWorkspace(chosen) {
  * @returns nothing.
  */
 function buildMenu() {
+  // Every `role:` item is named explicitly. Measured on this machine: Electron
+  // labels them in English on Windows ("Reload", "Actual Size", "Zoom In"), and
+  // the role still supplies the accelerator. Without the label the View menu
+  // would stay English in a Chinese shell.
   const template = [
     {
-      label: 'File',
+      label: t('menu.file'),
       submenu: [
-        { label: 'Open Folder…', accelerator: 'CmdOrCtrl+O', click: () => void chooseWorkspace() },
-        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => void openSettingsWindow() },
+        { label: t('menu.openFolder'), accelerator: 'CmdOrCtrl+O', click: () => void chooseWorkspace() },
+        { label: t('menu.settings'), accelerator: 'CmdOrCtrl+,', click: () => void openSettingsWindow() },
         { type: 'separator' },
         {
-          label: 'Copy GUI URL',
+          label: t('menu.copyUrl'),
           click: () => {
             if (currentUrl !== null) clipboard.writeText(currentUrl);
           },
         },
         {
-          label: 'Open in Browser',
+          label: t('menu.openInBrowser'),
           click: () => {
             if (currentUrl === null) return;
             shell.openExternal(currentUrl).catch(() => {});
           },
         },
         { type: 'separator' },
-        { label: 'Quit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
+        { label: t('menu.quit'), accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],
     },
     {
-      label: 'View',
+      label: t('menu.view'),
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
+        { role: 'reload', label: t('menu.reload') },
+        { role: 'forceReload', label: t('menu.forceReload') },
+        { role: 'toggleDevTools', label: t('menu.toggleDevTools') },
         { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
+        { role: 'resetZoom', label: t('menu.actualSize') },
+        { role: 'zoomIn', label: t('menu.zoomIn') },
+        { role: 'zoomOut', label: t('menu.zoomOut') },
         { type: 'separator' },
-        { role: 'togglefullscreen' },
+        { role: 'togglefullscreen', label: t('menu.toggleFullScreen') },
       ],
     },
     {
-      label: 'Help',
+      label: t('menu.help'),
       submenu: [
-        { label: 'Show Log Folder', click: () => void shell.openPath(LOG_DIR) },
+        { label: t('menu.showLogFolder'), click: () => void shell.openPath(LOG_DIR) },
         {
-          label: 'Export Diagnostics…',
+          label: t('menu.exportDiagnostics'),
           click: () => {
             const written = exportDiagnostics();
             if (written !== null && win !== null && !win.isDestroyed()) {
               void dialog.showMessageBox(win, {
                 type: 'info',
                 title: APP_NAME,
-                message: 'Diagnostics written',
-                detail: `${written}\n\nIt contains versions, settings, state and the last three logs, with any token removed.`,
-                buttons: ['OK'],
+                message: t('dialog.diagnosticsWritten'),
+                detail: t('dialog.diagnosticsDetail', { path: written }),
+                buttons: [t('dialog.ok')],
               });
             }
           },
         },
         {
-          label: `About ${APP_NAME}`,
+          label: t('menu.about'),
           click: () => {
             const options = {
               type: 'info',
-              title: `About ${APP_NAME}`,
+              title: t('dialog.aboutTitle'),
               message: `${APP_NAME} ${app.getVersion()}`,
-              detail:
-                `A desktop shell for DeepSeek Harness.\n\n` +
-                `Harness profile: web (your own profile, with your plugins)\n` +
-                `Workspace: ${workspace}\n` +
-                `Settings: ${CONFIG_PATH}\n` +
-                `Logs: ${LOG_DIR}`,
-              buttons: ['OK'],
+              detail: t('dialog.aboutDetail', {
+                workspace,
+                configPath: CONFIG_PATH,
+                logDir: LOG_DIR,
+              }),
+              buttons: [t('dialog.ok')],
             };
             if (win === null) void dialog.showMessageBox(options);
             else void dialog.showMessageBox(win, options);
@@ -743,6 +981,10 @@ function buildMenu() {
 
 /**
  * Put a tray icon beside the clock, when an icon is available.
+ *
+ * Rebuilt rather than patched whenever the language or the workspace changes:
+ * both the tooltip and two of the three labels depend on those.
+ *
  * @returns nothing.
  */
 function buildTray() {
@@ -751,17 +993,21 @@ function buildTray() {
     return;
   }
   try {
-    tray = new Tray(nativeImage.createFromPath(ICON_PNG));
-    tray.setToolTip(`${APP_NAME} — ${basename(workspace)}`);
+    if (tray === null) {
+      tray = new Tray(nativeImage.createFromPath(ICON_PNG));
+      tray.on('click', () => (win === null ? createWindow() : (win.show(), win.focus())));
+    }
+    // `basename('D:\\')` is an empty string, which would leave a dangling dash.
+    const folder = basename(workspace);
+    tray.setToolTip(folder === '' ? t('tray.noWorkspace') : t('tray.tooltip', { workspace: folder }));
     tray.setContextMenu(
       Menu.buildFromTemplate([
-        { label: `Show ${APP_NAME}`, click: () => (win === null ? createWindow() : (win.show(), win.focus())) },
-        { label: 'Open Folder…', click: () => void chooseWorkspace() },
+        { label: t('tray.show'), click: () => (win === null ? createWindow() : (win.show(), win.focus())) },
+        { label: t('tray.openFolder'), click: () => void chooseWorkspace() },
         { type: 'separator' },
-        { label: 'Quit', click: () => app.quit() },
+        { label: t('tray.quit'), click: () => app.quit() },
       ]),
     );
-    tray.on('click', () => (win === null ? createWindow() : (win.show(), win.focus())));
     log('tray icon created');
   } catch (error) {
     log(`could not create the tray icon: ${error.message}`);
@@ -788,7 +1034,7 @@ function openSettingsWindow() {
     minWidth: 520,
     minHeight: 480,
     show: false,
-    title: `${APP_NAME} — Settings`,
+    title: t('window.settings'),
     parent: win ?? undefined,
     backgroundColor: '#101418',
     icon: existsSync(ICON_PNG) ? ICON_PNG : undefined,
@@ -807,6 +1053,10 @@ function openSettingsWindow() {
     settingsWin = null;
   });
   settingsWin.webContents.once('did-finish-load', () => {
+    // The page's copy arrives this way, not from a preload: keep it ahead of the
+    // diagnostic probes below so an injected failure cannot leave English text
+    // on a Chinese page.
+    pushStrings();
     settingsWin?.webContents
       .executeJavaScript('typeof window.dshSettings', true)
       .then((kind) => log(`settings bridge: ${String(kind)}`))
@@ -867,6 +1117,7 @@ function registerSettingsIpc() {
     config: { ...config },
     defaults: { ...DEFAULT_CONFIG },
     workspace,
+    language: shellLanguage,
     paths: { data: USER_DATA, logs: LOG_DIR },
     versions: {
       app: app.getVersion(),
@@ -875,6 +1126,10 @@ function registerSettingsIpc() {
       dsh: dshVersion,
     },
   }));
+
+  // The page's copy. A read of a fixed dictionary, with no argument from the
+  // renderer, so it adds no reach to the bridge.
+  ipcMain.handle('settings:strings', () => ({ ...messagesFor(shellLanguage) }));
 
   ipcMain.handle('settings:save', (_event, values) => {
     const given = values !== null && typeof values === 'object' && !Array.isArray(values) ? values : {};
@@ -887,20 +1142,39 @@ function registerSettingsIpc() {
     // The supervisor holds this same object, so replacing its fields is what
     // makes restart policy and grace-period changes take effect immediately.
     const hotkeyChanged = next.globalHotkey !== config.globalHotkey;
+    const languageChanged = next.language !== config.language;
     Object.assign(config, next);
     if (hotkeyChanged) {
       globalShortcut.unregisterAll();
       registerHotkey();
     }
-    log(`settings saved: ${JSON.stringify(next)}${problems.length > 0 ? ` (refused: ${problems.join('; ')})` : ''}`);
-    return { config: next, problems };
+    // The shell re-renders now; the GUI cannot, because Chromium's interface
+    // language was fixed when this process started. Hence `restartRequired`.
+    // `strings` rides the response as well as being pushed, so the page can
+    // answer in the language that was just chosen rather than the previous one.
+    if (languageChanged) applyLanguage(next.language);
+    // Notes are translated here, after `applyLanguage`, so a refusal is reported
+    // in the language that is now in effect — and the log keeps the English
+    // rendering, because the log is English by decision.
+    const reported = problems.map((problem) => problemMessage(problem));
+    log(
+      `settings saved: ${JSON.stringify(next)}` +
+        (reported.length > 0 ? ` (refused: ${problems.map((p) => problemMessage(p, createTranslator('en'))).join('; ')})` : ''),
+    );
+    return {
+      config: next,
+      problems: reported,
+      language: shellLanguage,
+      restartRequired: languageChanged,
+      strings: { ...messagesFor(shellLanguage), __lang: htmlLanguage(shellLanguage) },
+    };
   });
 
   ipcMain.handle('settings:choose-workspace', async () => {
     const parent = settingsWin ?? win;
     if (parent === null || parent.isDestroyed()) return null;
     const result = await dialog.showOpenDialog(parent, {
-      title: 'Choose the workspace for DSH Desktop',
+      title: t('dialog.chooseWorkspace'),
       properties: ['openDirectory', 'createDirectory'],
     });
     if (result.canceled || result.filePaths.length === 0) return null;
@@ -967,10 +1241,10 @@ function refreshJumpList() {
     remembered.length > 0 ? remembered : typeof state.lastWorkspace === 'string' ? [state.lastWorkspace] : [];
   const base = app.isPackaged ? [] : [app.getAppPath()];
   const tasks = [
-    { type: 'task', title: `Open ${APP_NAME}`, program: process.execPath, args: [...base] },
+    { type: 'task', title: t('jump.openApp'), program: process.execPath, args: [...base] },
     ...recent.map((dir) => ({
       type: 'task',
-      title: `Open ${basename(dir)}`,
+      title: t('jump.openFolder', { folder: basename(dir) }),
       program: process.execPath,
       args: [...base, dir],
     })),
@@ -990,7 +1264,10 @@ function refreshJumpList() {
  */
 function registerHotkey() {
   const accelerator = config.globalHotkey;
-  if (accelerator === null) {
+  // A blank field means "no hotkey", and `normalizeConfig` stores that as null.
+  // Registering null threw, which made saving the settings window fail whenever
+  // the shortcut had been cleared.
+  if (accelerator === null || accelerator === undefined) {
     log('global hotkey disabled by config');
     return;
   }
@@ -1127,6 +1404,9 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     pruneLogs();
+    // Before the window exists: this run's own token does not exist yet, so
+    // nothing live can be swept away, and the jar is clean for the exchange.
+    await clearStaleAuthCookies();
     createWindow();
     buildMenu();
     buildTray();
@@ -1145,14 +1425,18 @@ if (!app.requestSingleInstanceLock()) {
     } else {
       saveState({ child: null });
     }
+    // Now that the stale record is settled, seed the jump list from the
+    // workspaces we actually remember rather than from whatever it found at
+    // startup.
+    refreshJumpList();
 
     let nodeExe;
     let anchor;
     try {
       const dshHome = resolveDshHome();
       log(`DSH_HOME: ${dshHome}`);
-      nodeExe = resolveNodeExe();
-      anchor = resolveInstallAnchor(dshHome);
+      nodeExe = resolveNodeExe(process.env, t);
+      anchor = resolveInstallAnchor(dshHome, t);
       dshVersion = anchor.version;
       anchorInfo = { dir: anchor.dir, binPath: anchor.binPath };
       nodeExePath = nodeExe;
@@ -1161,7 +1445,7 @@ if (!app.requestSingleInstanceLock()) {
       log(`dsh: ${anchor.version} at ${anchor.dir}`);
     } catch (error) {
       log(`startup refused: ${error.message}`);
-      showStatus(error.message, true);
+      showStatus(t('status.couldNotStart', { message: error.message }), true);
       return;
     }
 
@@ -1171,6 +1455,7 @@ if (!app.requestSingleInstanceLock()) {
       config,
       cwd: workspace,
       log,
+      t: (key, params) => t(key, params),
       onReady: (url) => {
         // The full URL is held in memory for this launch only. It carries the
         // process launch token, which is a live credential: the state file gets
@@ -1197,12 +1482,12 @@ if (!app.requestSingleInstanceLock()) {
               `url=${redactToken(win.webContents.getURL())} loading=${String(win.webContents.isLoading())} ` +
               `title=${JSON.stringify(win.webContents.getTitle())}`,
           );
-          showStatus('The harness is running, but its interface did not load. See Help → Show Log Folder.', true);
+          showStatus(t('status.notLoaded'), true);
         }, 20_000);
       },
       onStatus: (status) => {
-        if (status.kind === 'starting') showStatus('Starting DeepSeek Harness…');
-        if (status.kind === 'restarting') showStatus(`The harness stopped; restarting (attempt ${status.attempt})…`);
+        if (status.kind === 'starting') showStatus(t('status.starting'));
+        if (status.kind === 'restarting') showStatus(t('status.restartingAttempt', { attempt: status.attempt }));
         if (status.kind === 'failed') showStatus(status.message, true);
       },
       onRecord: (record) =>
@@ -1230,7 +1515,7 @@ if (!app.requestSingleInstanceLock()) {
     // unobserved rejected promise: no window content, no message, and — in a
     // packaged app — no stderr for anyone to read.
     log(`startup failed: ${error?.stack ?? error?.message ?? String(error)}`);
-    showStatus(`DSH Desktop could not start.\n\n${error?.message ?? String(error)}`, true);
+    showStatus(t('status.couldNotStart', { message: error?.message ?? String(error) }), true);
   });
 
   app.on('window-all-closed', () => {

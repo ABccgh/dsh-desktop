@@ -362,5 +362,151 @@ would reverse it. Never rewrite an entry; supersede it with a new one.
 - **Because:** a reader who trusts "six" looks for a missing call instead of a stale sentence.
 - **Reversed by:** nothing; it is a count.
 
+## D-21: How does the shell decide which language to show?
+
+- **Decided:** `config.language` is one of `auto`, `zh`, `en`, and the default is **`auto`**. `auto`
+  resolves through the same rule the web GUI's client uses: walk the system's ordered language list
+  and take the first language whose **primary subtag** is one this shell ships
+  (`@deepseek-ai/dsh-client-locale/lib/client.js:1344-1355` is the rule being matched). Measured on
+  this machine: preferred `['zh-Hans-CN']` → `zh`, and the GUI's own renderer reports
+  `["zh-CN","zh-Hans-CN"]`. An unknown id is refused in `config.mjs` rather than being coerced here,
+  so a hand-edited file says so in the log instead of silently following the system.
+- **Because:** the shell and the window it hosts must agree without coordination. `auto` is the only
+  default that gives a Chinese user a Chinese application on first launch, and the primary-subtag rule
+  is what makes `zh-CN`, `zh-TW` and `zh-Hans-CN` all work — the alternative (exact `zh` only) would
+  have left the very machine this was built on in English.
+- **Rejected:** (1) defaulting to `zh` — it would override an English user's own environment, and the
+  GUI, being a separate program, would not follow; (2) shipping a `ja`-style language-pack plugin, which
+  the GUI supports but which solves a problem nobody here has; (3) reading `app.getLocale()` instead of
+  `getPreferredSystemLanguages()`, because the former is the locale *this app* resolved — after a
+  `--lang` switch it reports the forced value, which is circular.
+- **Reversed by:** measuring a case where the GUI and this resolver disagree on the same machine and
+  the *GUI's* answer is the one users expect.
+
+## D-22: When may the shell put `--lang` on Chromium's command line?
+
+- **Decided:** **only for an explicit `zh` or `en`.** `auto` appends nothing at all, leaving Chromium
+  to read the system locale itself.
+- **Because:** `auto` means "follow the system", and a `--lang` switch is precisely the thing that
+  stops it from doing so. Measured both directions: with `auto` on a `zh-CN` machine the log says
+  `language: zh (setting auto, system zh)`; with `--language en` it says
+  `language: en (setting en, system zh)`. *(The claim about the GUI that stood at the end of this
+  sentence is false — see the correction below and D-24.)*
+- **Rejected:** passing `--lang zh-CN` for `auto` as well — it looked harmless and is not: it would
+  freeze the GUI's language at whatever the shell detected at first launch, so adding Chinese later in
+  Windows would change the shell and not the window.
+- **Correction (D-24):** the sentence that used to stand here — that the GUI "stays Chinese because
+  Chromium's switch does not reach the harness, which runs as a separate process on the system Node" —
+  is **false**. The harness being a separate process is irrelevant: the GUI is a renderer of *this*
+  Electron instance, and the switch does reach it. See D-24.
+- **Reversed by:** Chromium gaining a way to change its interface language at runtime, which would
+  remove the restart requirement this decision is entangled with.
+
+## D-23: Should the shell write the GUI's language preference into `$DSH_HOME/settings.yaml`?
+
+- **Decided:** **no.** The shell never writes that file. Its own language lives in its own
+  `config.json`, and the GUI's follows the system locale.
+- **Because:** three reasons, each independently sufficient. (1) The shell's stated boundary is that it
+  writes nothing under `$DSH_HOME` — it reads the profile and its own state lives under
+  `%APPDATA%\DSH Desktop`. (2) That file is **shared** with the user's own long-running `dsh web` on
+  3080 (measured: `/api/balance` and this very session read the same home), so writing a locale there
+  would retitle a different application's interface, live. (3) It is the *harness's* preference
+  mechanism, not the shell's; using it would make one settings window own two programs' language.
+- **Rejected:** writing `locale.preference: zh` as a convenience, which is what the GUI's own README
+  documents for a user — offered to the human, and refused by them in this session after the boundary
+  was stated.
+- **Reversed by:** the user asking for the GUI to be forced to Chinese *independently of their system
+  locale*, which is the one behaviour this decision cannot produce; the change would then be a
+  deliberate, permitted write, and would need to handle the concurrent `dsh web` on 3080.
+
+## D-24: Does the shell's language choice reach the GUI?
+
+- **Decided:** **yes, it does**, and the documents that said otherwise were wrong. The GUI is a
+  renderer of *this* Electron instance — the harness child only serves its assets over loopback — so
+  `app.commandLine.appendSwitch('lang', …)` moves `navigator.languages` for the page the GUI runs in.
+  Measured in a real renderer of the same app: with `lang=en-US`, `NAVIGATOR=en-US | en-US,zh-Hans-CN`.
+  The GUI's resolver walks exactly that ordered list
+  (`@deepseek-ai/dsh-client-locale/lib/client.js:1344-1355`) and `~/.dsh/settings.yaml` holds no
+  `locale` key to override it.
+- **Consequence, stated plainly because it is what a user will see:** choosing `English` gives an
+  English shell **and** an English GUI after a restart; choosing `中文` forces an English system's GUI
+  to Chinese; only `auto` leaves the GUI alone. That is a coherent reading of "make the app English"
+  and it is what the user asked for, which is why this is a documentation correction and not a code
+  change.
+- **Because the earlier claim was never checked.** It reasoned from "the harness is a separate
+  process" — true, and irrelevant to the renderer's locale. It was written into D-22 and M6's notes as
+  *measured*, and the smoke check that appeared to confirm it asserts only the shell's log line, so it
+  could not fail. An adversarial review falsified it with a two-line probe; the lesson is recorded in
+  `PROJECT.md`.
+- **Rejected:** forcing `auto` to append `--lang` as a way to keep shell and GUI in lockstep — that is
+  exactly what D-22 forbids, and it would break the one setting that means "follow the system".
+- **Reversed by:** measuring that a Chromium renderer's `navigator.languages` no longer follows the
+  app's `--lang` switch on this Electron line.
+
+## D-25: Who owns the window title?
+
+- **Decided:** **the shell does**, and it says so in the language it has chosen. `page-title-updated`
+  is prevented, the pages' own `<title>` elements are never what the title bar shows, and the title is
+  written by `win.setTitle(t('window.title'))` / `settingsWin.setTitle(t('window.settings'))`.
+- **Because:** a page's `<title>` beats a BrowserWindow's `title:` option. Measured: a window created
+  with `title: 'FROM-CONSTRUCTOR'` loaded the real `settings.html` and reported
+  `win="DSH Desktop — Settings"` — the document's. So a static `<title>` would have left an English
+  title bar on a Chinese window, and removing the guard (as this change first did, accidentally) would
+  have handed the title to the hosted GUI — which declares itself `DeepSeek Harness` in
+  `dsh-web-frontend/dist/index.html`.
+- **Measured both halves, because they interact:** with the guard in place a page setting
+  `document.title` does **not** change the title bar (`win` stayed `FROM-CONSTRUCTOR`, and stayed put
+  after a later page-side change), while `win.setTitle()` from the main process does (`SET-FROM-MAIN`).
+  Without the guard, the page wins. Both are asserted in `test/i18n.test.mjs`.
+- **Rejected:** letting the page own its title and translating each `<title>` — it works, but it makes
+  the hosted GUI the authority over the shell's window, and the GUI can rename it at any time.
+- **Reversed by:** a reason for the GUI's own title to appear in the title bar, which would mean
+  dropping the guard and translating the pages instead.
+
+## D-26: What may a dictionary push overwrite?
+
+- **Decided:** **not the status line, and not a live failure.** `loading.html`'s apply hook skips
+  `#status` and then re-renders the status from a remembered `{ key, text, isError, params }`;
+  `settings.html` re-renders its own line the same way. The main process pushes the dictionary to the
+  **main window** on `did-finish-load`, before any status.
+- **Because each half was measured as a defect, not imagined:**
+  - Without the skip, opening the Settings window re-pushed the dictionary to the main window, and the
+    apply hook wrote `page.starting` over `#status` — a boot-timeout message became "正在启动 DeepSeek
+    Harness…" with the red error styling still applied and nothing left to restore it, because
+    `surfaceFailure` shows no dialog in that state and the supervisor has already given up.
+  - Without the push on the main window, `strings` stayed `{}` there, so the failure page's hint fell
+    back to English — on a Chinese page, in the one screen a user sees when the harness will not start.
+  - A status pushed *before* the dictionary rendered English for the same reason, which is why the
+    push precedes the first status.
+  - Passing the message **id** alongside the resolved text is what lets a live language switch
+    re-render the sentence; without it the failure kept the language it was pushed under.
+- **Rejected:** clearing `#status` on a push instead of skipping it — an empty status line is a silent
+  failure, which is worse than a stale one.
+- **Reversed by:** nothing; each clause is a measured regression.
+
+## D-27: What happens to the launch-token cookies an earlier run left behind?
+
+- **Decided:** the shell **sweeps them at startup**, before its own window exists: every cookie for
+  `http://127.0.0.1/` whose name starts with `dsh-auth-` is removed. The persistent partition itself is
+  kept — the GUI's localStorage (theme, layout) lives in it and is the reason the partition exists.
+- **Because the jar grows without bound, and the failure is silent.** The GUI's server mints a cookie
+  whose **name** carries the launch authority (`dsh-auth-<43 chars>`), and the authority changes every
+  launch because the port does. So each run adds a cookie rather than replacing one, and nothing ever
+  removed them. Measured: **70 rows** had accumulated, and at that size the token exchange answered
+  **HTTP 431 (Request Header Fields Too Large)** — the window then mounted nothing and reported no
+  error of its own, which is the least diagnosable failure this shell has. It surfaced as
+  `FAIL the interface mounted` in the packaged ladder after repeated smoke runs had exhausted the jar.
+- **Measured after the fix:** the sweep logs `cleared 1 stale launch-token cookie(s)`, the jar holds
+  exactly **one** cookie — the current run's — and stays at one across three further launches, all
+  19/19. The ladder now carries a check for `HTTP 431` so the symptom cannot come back unnoticed.
+  *(Why "cleared 1" rather than 70: `session.cookies.get({url})` returns only what that URL would
+  send, so the sweep removes what is actually stale for this origin; the jar's own count is what
+  shows the growth has stopped, and that is what was measured.)*
+- **Rejected:** clearing the whole partition on startup — it would work and would also throw away the
+  GUI's theme and layout, which the partition exists to keep; and clearing by port, which changes every
+  launch and so cannot name a stale entry.
+- **Reversed by:** the harness minting a constant cookie name, which would make the sweep unnecessary
+  rather than wrong.
+
 
 

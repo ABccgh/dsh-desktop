@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { resolveNodeExe, workspaceFromArgv } from '../src/paths.mjs';
+import { createTranslator } from '../src/i18n.mjs';
+import { INSTALL_MESSAGE_KEYS, NODE_MESSAGE_KEY, resolveInstallAnchor, resolveNodeExe, workspaceFromArgv } from '../src/paths.mjs';
 
 /** A fake filesystem: only the named paths are directories. */
 const dirs = (...existing) => ({ isDirectory: (candidate) => existing.includes(candidate) });
@@ -52,4 +54,42 @@ test('no Node anywhere on PATH is a named failure, not a crash', () => {
   assert.throws(() => resolveNodeExe({ PATH: 'C:\\Windows' }), /Node\.js was not found on PATH.*1 directory/s);
   assert.throws(() => resolveNodeExe({ PATH: '' }), /Node\.js was not found on PATH.*0 directories/s);
   assert.throws(() => resolveNodeExe({}), /Node\.js was not found on PATH/);
+});
+
+test('a missing installation is reported through the injectable translator', () => {
+  // Without a translator the message is the English one — the unit test above
+  // depends on it, and so does any caller that forgets to inject one.
+  const missing = join('C:\\definitely-not-a-dsh-home', 'x');
+  assert.throws(
+    () => resolveInstallAnchor(missing),
+    (error) => /DSH installation not found/.test(error.message) && error.message.includes('install.notFound') === false,
+  );
+
+  // With one, the same failure speaks the reader's language. This is the whole
+  // reason these messages are keys rather than sentences: the startup path puts
+  // one on the loading page, which a Chinese shell renders in Chinese.
+  const t = (key, params) => `${key}>>${params.link}`;
+  assert.throws(
+    () => resolveInstallAnchor(missing, t),
+    (error) => error.message.startsWith(`${INSTALL_MESSAGE_KEYS.notFound}>>`) && error.message.endsWith(missing) === false && error.message.includes(missing),
+    'the translated message must still name the junction it looked for',
+  );
+});
+
+test('a PATH with no node names the searched executable through the translator', () => {
+  const t = (key, params) => `${key}>>${params.executable}|${params.count}|${params.plural}`;
+  const expected = (count, plural) => `${NODE_MESSAGE_KEY}>>node.exe|${count}|${plural}`;
+  assert.throws(
+    () => resolveNodeExe({ PATH: 'C:\\Windows' }, t),
+    (error) => error.message === expected(1, 'y') || error.message === `${NODE_MESSAGE_KEY}>>node|1|y`,
+  );
+  assert.throws(
+    () => resolveNodeExe({ PATH: 'C:\\Windows;C:\\Windows\\System32' }, t),
+    (error) => error.message === expected(2, 'ies') || error.message === `${NODE_MESSAGE_KEY}>>node|2|ies`,
+    'the plural value changes with the count, which is what English needs it for',
+  );
+  // The real translators render it, so the key is not merely a symbol.
+  assert.throws(() => resolveNodeExe({ PATH: 'C:\\Windows' }, createTranslator('en')), /1 directory/);
+  assert.throws(() => resolveNodeExe({ PATH: 'C:\\Windows;C:\\Windows\\System32' }, createTranslator('en')), /2 directories/);
+  assert.throws(() => resolveNodeExe({ PATH: 'C:\\Windows' }, createTranslator('zh')), /Node\.js 找不到|PATH/);
 });
