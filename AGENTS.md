@@ -70,11 +70,19 @@ whose rule 7 is "this repo ships presets and nothing else". Do not move it in.
   client matches by primary subtag), which is why a Chinese system gets a Chinese GUI with no
   configuration at all. The shell's own surfaces re-render immediately on a language change; the GUI
   cannot, so the settings window says a restart is needed.
+- **A setting nobody reads is a defect, not a placeholder.** `maxWindows` and `notifyOnFailure` both
+  shipped defaulted, validated, and read by nothing; the first was deleted and the second wired up.
+  `test/config.test.mjs` now fails when any key in `DEFAULT_CONFIG` has no `config.<key>` read in
+  `src/` or `bin/`. **Write the reader in the same change as the key.** If you ever harden that test,
+  mutation-test it: delete a single read and confirm the suite fails — the first three versions of it
+  passed no matter what, once because it matched the key inside a log message, once because `\\b` in a
+  **regex literal** is a literal backslash, and once because its exclusion compared a relative path
+  against an absolute one.
 
 ## Commands
 
 ```powershell
-npm test            # node --test test/ — 100 tests, ~0.4 s, no real process touched
+npm test            # node --test test/ — 101 tests, ~0.4 s, no real process touched
 npm start           # electron .  (add -- "D:\some\project" to choose the workspace)
 npm run icon        # build/icon.png + build/icon.ico
 npm run pack        # dist\DSH Desktop\DSH Desktop.exe — portable, no extra toolchain

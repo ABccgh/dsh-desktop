@@ -508,5 +508,48 @@ would reverse it. Never rewrite an entry; supersede it with a new one.
 - **Reversed by:** the harness minting a constant cookie name, which would make the sweep unnecessary
   rather than wrong.
 
+## D-28: What happens to a config key that nothing reads?
+
+- **Decided:** **`maxWindows` is deleted**, and **`notifyOnFailure` is wired up**. A key in
+  `DEFAULT_CONFIG` must have a reader somewhere in `src/` or `bin/`, and a test now fails when one does
+  not.
+- **Because both had shipped as validated settings that nothing read**, and the difference between them
+  is only which fix was right. `maxWindows` ("Workspace windows") was defaulted, validated over 1–8
+  and rendered in the settings form while no code read it — the project's own notes called it "a
+  control that silently does nothing is worse than an absent one" and then left it there for three
+  milestones. `notifyOnFailure` promised a tray notification when the harness gives up, and that
+  promise was implementable in about fifteen lines: `tray.displayBalloon` was probed on this machine
+  and answered `DISPLAY_BALLOON ok`.
+- **Where the balloon call goes is part of the decision.** At the **top** of `surfaceFailure`, before
+  its two early returns: the case a tray balloon exists for is the window being gone, hidden, or never
+  loaded, which is exactly where those returns bail out. It is wrapped in try/catch and does nothing
+  without a tray, because a balloon is a Windows shell feature that can be suppressed by notification
+  settings or quiet time — the dialog, or the loading page, stays the path allowed to matter.
+- **Rejected:** (1) hiding `maxWindows` behind `hidden` in the schema — it would still be a promise in
+  `config.json`; (2) leaving both and documenting them — a visible dead control is worse than an absent
+  one, which is this project's own words; (3) deleting `notifyOnFailure` too, which was cheaper but
+  threw away a real capability that the probe showed was available.
+- **Reversed by:** M3 arriving and needing the key back. It should come back **with** its reader in the
+  same change, or the test will refuse it.
+
+## D-29: Which language does the published repository speak?
+
+- **Decided:** **English for the code, comments, commit messages and `docs/agent-notes/`; both for the
+  README.** `README.zh.md` was added and the two link to each other.
+- **Because the product speaks Chinese and the repository spoke only English.** A user who reads the
+  application has no reason to be unable to read how to install it, and a README is the cheapest thing
+  in a repository to duplicate. The engineering record is different: it cites symbols, log lines and
+  commands in English, and a translation would be a second copy to keep in step for no reader.
+- **The notes ship, with their absolute paths.** `docs/agent-notes/` contains `D:\dsh-desktop` and
+  `C:\Users\曦曦\...`, candid self-criticism, and the history of several wrong turns. That was put to the
+  user in this session, twice — D-19's entry reports the first time — and the answer was to publish
+  them. Recorded here so the next person does not have to guess whether it was an oversight.
+- **Rejected:** (1) sanitising the paths out of the notes, which would mean rewriting the record and
+  breaking the citations that make it useful; (2) moving the notes to a private repository, which would
+  hide the measurements from the people most likely to need them.
+- **Reversed by:** the user deciding the notes should not be public. The mechanical form of that is
+  `git rm -r --cached docs/agent-notes`, an ignore rule, and a note in `PROJECT.md` pointing at wherever
+  they live instead — not a rewrite of history.
+
 
 

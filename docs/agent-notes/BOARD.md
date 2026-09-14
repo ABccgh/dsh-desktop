@@ -5,9 +5,9 @@
 **DSH Desktop** at `D:\dsh-desktop` — a Windows desktop shell for DeepSeek Harness: one window
 showing the user's own GUI, no browser chrome, no terminal, no server to start by hand.
 
-The current work is the approved six-milestone improvement plan, plus a milestone the user asked for
-afterwards. **M1, M2, M4, M5 and M6 (the Chinese interface) are complete and verified; M3 is not
-started and the NSIS installer half of M5 has never been run.**
+The work is the original five-milestone improvement plan, a sixth that split into the acceptance
+ladder and the docs, and a seventh the user asked for afterwards. **M1, M2, M4, M5, M6 and M7 are
+complete and verified; M3 is not started and the NSIS installer half of M5 has never been run.**
 
 | Milestone | State |
 | --- | --- |
@@ -18,7 +18,8 @@ started and the NSIS installer half of M5 has never been run.**
 | **M5** exe icon + version | **done, verified** (`exe ProductName reads back as "DSH Desktop"`) |
 | **M5** NSIS installer | **config written, NEVER RUN** — `npm run installer` exists but has not been executed, so the NSIS toolchain and the produced installer are both unproven |
 | **M3** multi-window | **NOT STARTED, NOT DESIGNED** — the largest item (973 lines, 113 references to one `win`); see below |
-| **M7** the Chinese interface (`src/i18n.mjs`, a language switch, `--language`) | **done, verified end to end** — 100 tests, **19/19 on the packaged build** (`npm run smoke`) and 19/19 from source; reviewed adversarially, and the eight findings that survived re-checking are fixed — see D-21…D-26 |
+| **M7** the Chinese interface (`src/i18n.mjs`, a language switch, `--language`) | **done, verified end to end** — 101 tests, **19/19 on the packaged build** (`npm run smoke`) and 19/19 from source; reviewed adversarially, and the eight findings that survived re-checking are fixed — see D-21…D-27 |
+| **Tidy-up** dead controls, stale docs, `README.zh.md`, publish | **done** — see D-28/D-29 and `PROJECT.md` |
 
 ## M7, after the adversarial review
 
@@ -59,12 +60,16 @@ scope: the `Help` menu was English while the GUI behind it showed `工作区`.
 | The CLI follows the language | `--help` prints Chinese under `auto` on this machine and English under `--language en` |
 | Nothing was touched under `$DSH_HOME` | The GUI's own preference file is deliberately **not** written; the user's `dsh web` on 3080 was the same pid before and after every launch (D-23) |
 
-## Open gap found while publishing
+## Closed: the dead control found while publishing
 
-`maxWindows` is visible in the settings form (**Workspace windows**) and read by nothing:
-`src/config.mjs:35,75` default and validate it, `src/settings.html:75-76,106` renders it, and no
-other file mentions the key. It is M3's placeholder leaking into the UI. Wire it up or hide it — a
-control that silently does nothing is worse than an absent one.
+`maxWindows` was visible in the settings form (**Workspace windows**) and read by nothing:
+`config.mjs` defaulted and validated it and `settings.html` rendered it, and no other file mentioned
+the key for three milestones. **Removed.** It was M3's placeholder leaking into the UI, and M3 will
+now re-create the key when it actually has two windows to count.
+
+`notifyOnFailure` was in the same state and has been **wired up** instead: `surfaceFailure` shows a
+tray balloon when the setting is on and a tray exists. Both are now guarded by a test that fails when
+any key in `DEFAULT_CONFIG` has no reader — which is what should have caught them the first time.
 
 ## M4 and M5, as verified
 

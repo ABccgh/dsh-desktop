@@ -70,10 +70,13 @@ export const DEFAULT_CONFIG = Object.freeze({
   closeToTray: false,
   /** Global shortcut that shows or hides the window; null disables it. */
   globalHotkey: 'Control+Alt+D',
-  /** Tell the user through the tray when the harness gives up. */
+  /**
+   * Show a tray balloon when the harness gives up, so a hidden window is not a
+   * silent one. Read by `surfaceFailure` — the config means nothing until
+   * something acts on it, which is why the inert `maxWindows` beside it was
+   * deleted rather than left as a visible control that does nothing.
+   */
   notifyOnFailure: true,
-  /** How many workspace windows may be open at once. Each one is a whole harness. */
-  maxWindows: 4,
 });
 
 /**
@@ -116,7 +119,6 @@ export function normalizeConfig(raw, onProblem = () => {}) {
   // only by hand-editing the file that the app never shows a path to.
   integer('bootTimeoutMs', 30_000, 1_800_000);
   integer('graceMs', 0, 120_000);
-  integer('maxWindows', 1, 8);
 
   const workspace = raw.workspace;
   if (workspace !== undefined && workspace !== null) {

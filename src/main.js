@@ -659,6 +659,10 @@ function safeOpenExternal(url, why) {
  */
 async function surfaceFailure(message) {
   log(`failure surfaced to the user: ${message}`);
+  // Before the returns below, and not inside the dialog branch: the case a tray
+  // balloon exists for is the one where the window is gone or hidden, which is
+  // exactly where both of those paths bail out.
+  notifyThroughTray();
   if (win === null || win.isDestroyed()) return;
   if (currentUrl === null || harnessPageLoaded !== true) {
     // The loading page is still what the user is looking at; showStatus already
@@ -682,6 +686,32 @@ async function surfaceFailure(message) {
     else if (response === 1) void shell.openPath(LOG_DIR);
   } catch (error) {
     log(`could not present the failure dialog: ${error.message}`);
+  }
+}
+
+/**
+ * Show a tray balloon saying the harness gave up, when the config asks for one.
+ *
+ * `notifyOnFailure` shipped as a validated setting that nothing read — a control
+ * that silently did nothing, which this project's own notes call worse than an
+ * absent one. It works now, or it is off.
+ *
+ * Deliberately best-effort. A balloon is a Windows shell feature: it may be
+ * suppressed by a notification setting or by quiet time, and it cannot exist at
+ * all without a tray, so every failure here is logged and swallowed — the
+ * dialog, or the loading page, remains the path that is allowed to matter.
+ *
+ * @returns nothing.
+ */
+function notifyThroughTray() {
+  if (config.notifyOnFailure !== true || tray === null || tray.isDestroyed()) return;
+  try {
+    // A short title on purpose: `DisplayBalloonOptions` states no length limit,
+    // and a title longer than the shell's own is truncated mid-character.
+    tray.displayBalloon({ title: APP_NAME, content: t('tray.stopped') });
+    log('tray balloon shown for the failure');
+  } catch (error) {
+    log(`could not show a tray balloon: ${error.message}`);
   }
 }
 
@@ -1555,3 +1585,9 @@ if (!app.requestSingleInstanceLock()) {
     );
   });
 }
+
+
+
+
+
+

@@ -91,9 +91,21 @@ npm start -- --language zh
 ```
 
 The expected lines are `language: auto — Chromium keeps the system locale, so the GUI follows the
-system too` (for `auto`), then `language: <zh|en> (setting <choice>, system <detected>)`. The GUI
-inside the window is a separate program and follows `navigator.languages`; `--lang` never reaches it,
-which is why forcing `en` gives an English shell around an unchanged GUI.
+system too` (for `auto`), then `language: <zh|en> (setting <choice>, system <detected>)`.
+
+**`--lang` does reach the GUI, and an earlier version of this file said it did not.** The GUI is a
+renderer of this same Electron instance, so an explicit `zh`/`en` moves `navigator.languages` for the
+page it runs in, and the GUI's own resolver follows that list: choosing English gives an English shell
+**and** an English GUI after a restart. Only `auto` leaves the GUI to the system. See D-24.
+
+## Check the tray balloon
+
+```powershell
+# notifyOnFailure shows a balloon when the harness gives up. It only appears if a tray
+# exists (so build/icon.png must be present) and Windows notifications are not suppressed.
+Get-Content (Get-ChildItem "$env:APPDATA\DSH Desktop\logs\*.log" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName |
+  Select-String -Pattern 'tray balloon|failure surfaced'
+```
 
 ## Build and install
 

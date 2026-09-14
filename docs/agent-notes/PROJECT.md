@@ -104,7 +104,7 @@ Electron 44.3.0.
 | `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) |
 | `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
 | `electron-builder.yml` | The NSIS installer target — **configured, never built** |
-| `test/*.test.mjs` | 100 tests over the pure modules (`npm test`, ~0.35 s) |
+| `test/*.test.mjs` | 101 tests over the pure modules (`npm test`, ~0.35 s) |
 
 ## Current state
 
@@ -179,7 +179,7 @@ evidence, because two of them contradict advice that was given to this project b
   with no probe, so `npm test` ran a real PowerShell query and would have run `taskkill /PID /T /F`
   against whatever held the fixture's pid. It passed only because that pid was gone. The suite now
   runs 72 assertions in **0.3 s**; the old run cost **534 ms**, and the difference is the proof.
-  *(The runner counts tests, not assertions: 79 of them as of M4, 100 as of M7, still ~0.35 s.
+  *(The runner counts tests, not assertions: 79 of them as of M4, 101 as of M7, still ~0.35 s.
   "Assertions" is this file's older word for the same measurement.)*
 - **Two reviewer findings were refuted by measurement, and are recorded so they are not re-chased:**
   the `console-message` handler is *not* broken on Electron 44 — the log contains real lines like
@@ -263,7 +263,8 @@ window is two programs, and only one of them was localized.
 - **Nothing writes `$DSH_HOME/settings.yaml`, which is a decision and not an omission.** The GUI's own
   preference mechanism is that file's `locale.preference`; the shell deliberately does not touch it,
   because it is shared with the user's own running `dsh web` and because the shell writes nothing
-  under `DSH_HOME`. D-19 records the reasoning and what would reverse it.
+  under `DSH_HOME`. D-23 records the reasoning and what would reverse it. *(This paragraph cited D-19
+  until it was checked; D-19 is about publishing this repository over the REST API.)*
 - **The acceptance ladder grew from 12 checks to 19**, and one of the new ones is the falsification
   that matters: a **second launch** with `--language en` on a `zh` system must resolve to `en`.
   `npm run smoke:dev` and `npm run smoke` both pass 19/19.
@@ -307,4 +308,41 @@ and one real launch were still running after their harnesses had been started; t
 **exact pid with `taskkill /T /F`**, never by name, and the session's own process (`node.exe` behind
 3080) was verified untouched afterwards. The lesson worth carrying: a launch that holds the
 single-instance lock can be a *real* launch, so before starting one check what is already running.
+
+## The tidy-up after M7 (2026-09-14)
+
+Asked for as "全面清理和全面整理，并上传 GitHub". The published tree was already clean — 42 tracked
+files, three ignored directories, and the two new files were not caught by any ignore rule — so the
+work was the parts of the repository that had gone stale, plus one dead control the notes had been
+carrying as a "known gap" for three milestones.
+
+- **`maxWindows` is gone, not hidden.** It was defaulted, validated over 1–8, rendered in the settings
+  form, and read by nothing: `grep` found it only in `config.mjs`, `settings.html` and the dictionary.
+  The notes had called it "a control that silently does nothing is worse than an absent one" and then
+  left it in place for three milestones. A `config.json` that still carries the key is now simply a
+  config with an unknown key, which is dropped silently — the house rule for unknown keys.
+- **`notifyOnFailure` now does what its comment always said.** It was in the same state — validated,
+  never read. `tray.displayBalloon({ title, content })` was probed on this machine first and answered
+  `DISPLAY_BALLOON ok`, and `DisplayBalloonOptions` states no length limit, which is why the title is
+  the product's short name and the sentence goes in `content`. The call sits at the **top** of
+  `surfaceFailure`, before its two early returns, because the window being gone or hidden is precisely
+  the case a tray balloon exists for.
+- **A dead key is now a test failure.** `test/config.test.mjs` scans `src/` and `bin/` for a
+  `config.<key>` read of every key in `DEFAULT_CONFIG`. It took three attempts to make it real, and
+  each failure is worth keeping:
+  1. it matched the key where it appeared in a **log message and a doc comment**, so deleting the one
+     real read still passed — a mention in prose is not a read;
+  2. the fix escaped the pattern as `'\\bconfig\\.${key}\\b'` inside a **regex literal**, where `\\b`
+     is a backslash followed by the letter b — so it matched nothing and passed forever;
+  3. the exclusion of `config.mjs` compared against `\config.mjs` while the map held **absolute**
+     paths, so the exclusion never applied and the module that *declares* the key counted as a reader.
+  Only the **mutation test** found all three: delete the single read of `notifyOnFailure`, expect the
+  suite to fail, restore it. A guard that has never been shown to fail is not a guard.
+- **Documentation corrections, each checked against the code rather than trusted:** `PROJECT.md` cited
+  D-19 for the `settings.yaml` decision when D-23 is the entry that holds it; `BOARD.md` still called
+  the plan "six-milestone" after M7 made it seven; `package.json` had **no** `repository` field at all,
+  while `D:\DeepSeek Harness\AGENTS.md` described it as naming the intended target — it now does, and
+  that sentence in the other repository was corrected to match.
+- **`README.zh.md`** was added, with the two READMEs linking to each other. The product speaks Chinese;
+  the repository did not.
 

@@ -1,5 +1,7 @@
 # DSH Desktop
 
+English | [中文](README.zh.md)
+
 A Windows desktop application for **[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)**:
 one window with your own DSH interface in it — no browser chrome, no terminal, no server to start by
 hand.
@@ -78,7 +80,7 @@ against, and the harness runs on that Node, not on Electron's bundled one (see
 
 ```powershell
 npm start                        # run from source
-npm test                         # 100 tests over the pure modules, ~0.4 s
+npm test                         # 101 tests over the pure modules, ~0.4 s
 npm run smoke                    # the acceptance ladder (19 checks) against the packaged build
 npm start -- "D:\some\project"   # start with that folder as the workspace
 npm start -- --settings          # open with the settings window showing
@@ -121,8 +123,9 @@ Working and verified on Windows 10/11 with DSH 0.1.5-rc.1, Node 26.8.1 and Elect
 things are deliberately unfinished and are recorded rather than hidden:
 
 - **One window and one workspace at a time.** Multiple windows are neither designed nor built. The
-  settings form still offers **Workspace windows**, and nothing reads it — the field is a placeholder
-  for that work, not a working control.
+  setting that used to promise them — **Workspace windows** — was validated, rendered, and read by
+  nothing; it has been removed rather than left as a control that does nothing. A test now fails when
+  any config key has no reader.
 - **The `electron-builder` NSIS installer target is configured but has never been built.**
   `bin/pack.mjs` is the supported path.
 - **The exe is unsigned**, so Windows shows SmartScreen's first-run warning.

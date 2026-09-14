@@ -72,10 +72,6 @@
       <label for="graceMs" data-i18n="settings.grace">Shutdown grace (ms)</label>
       <input id="graceMs" type="number" min="0" max="120000" />
       <span class="hint" data-i18n="settings.grace.hint">how long a quit waits for the child to die before giving up on confirming it</span>
-
-      <label for="maxWindows" data-i18n="settings.maxWindows">Workspace windows</label>
-      <input id="maxWindows" type="number" min="1" max="8" />
-      <span class="hint" data-i18n="settings.maxWindows.hint">how many workspaces may be open at once; each one is a whole harness</span>
     </div>
 
     <h2 data-i18n="settings.section.behaviour">Behaviour</h2>
@@ -112,7 +108,7 @@
     </footer>
 
     <script>
-      const fields = ['port', 'bootTimeoutMs', 'restartLimit', 'restartWindowMs', 'graceMs', 'maxWindows'];
+      const fields = ['port', 'bootTimeoutMs', 'restartLimit', 'restartWindowMs', 'graceMs'];
       const status = document.getElementById('status');
       let defaults = null;
       let strings = {};
