@@ -1,6 +1,6 @@
 {
   "dshVersion": "0.1.5-rc.3",
-  "recordedAt": "2026-09-23T15:11:13.729Z",
+  "recordedAt": "2026-09-23T15:37:02.962Z",
   "patterns": [
     {
       "pattern": "dsh/lib/bin.js",
@@ -85,6 +85,34 @@
       "why": "the source of the app`s icon, read at build time by tools/make-icon.mjs",
       "files": {
         "dsh-web-frontend/dist/favicon.svg": "c61a62a9d47d8660f9cfe08aac6775ff0476f7d6c5053f7659c1f8493fd6d814"
+      }
+    },
+    {
+      "pattern": "dsh-client-ui-conversation/lib/client.js",
+      "why": "the composer: its Lexical editor, the text-ref transform pair and the claim decoration — the code the 2026-09-23 error burst came from (bundled lexical 0.49.0 included)",
+      "files": {
+        "dsh-client-ui-conversation/lib/client.js": "81314dfd95864f2522f8edb812e3f8e08b04a8ef2141913e6e8cbdaae1ffc37f"
+      }
+    },
+    {
+      "pattern": "dsh-client-ui-input-trigger/lib/client.js",
+      "why": "the `@` / `/` menu: the trigger lexicon the composer`s reference scan reads, and the pick that creates a chip",
+      "files": {
+        "dsh-client-ui-input-trigger/lib/client.js": "7c78c0e3dd4d63656ca1b523ef76e93942a8c8e925eec0fb5c95932693ab933c"
+      }
+    },
+    {
+      "pattern": "dsh-client-ui-chat/lib/client.js",
+      "why": "the surrounding turn UI; it changed between rc.1 and rc.3 (a CSS margin) while the composer did not, which is how \"the upgrade did not touch the editor\" was established",
+      "files": {
+        "dsh-client-ui-chat/lib/client.js": "6527556d25c7b2a27f2e3bfb96cc2ae3d9244f1213147e245b17684ad8d9e396"
+      }
+    },
+    {
+      "pattern": "dsh-client-ui-attachment/lib/client.js",
+      "why": "attachments are inserted into the same composer document as decorator nodes",
+      "files": {
+        "dsh-client-ui-attachment/lib/client.js": "b0245951dfb86dc5259fcae1499160b689460bf2637e0abea94469b45202bea5"
       }
     }
   ]

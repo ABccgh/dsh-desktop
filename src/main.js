@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 import { DEFAULT_CONFIG, normalizeConfig, problemMessage } from './config.mjs';
 import { buildDiagnostics } from './diagnostics.mjs';
+import { createErrorBurst } from './error-burst.mjs';
 import { chooseGeometry } from './geometry.mjs';
 import { HarnessSupervisor } from './harness.mjs';
 import {
@@ -174,6 +175,23 @@ process.stderr.on('error', () => {});
 const cliSwitches = process.argv.slice(1).filter((argument) => argument.startsWith('-'));
 
 /**
+ * The composer probe: development-only, and never part of a packaged app.
+ *
+ * The acceptance ladder mounts the interface and quits without touching the
+ * editor — which is exactly why a composer that threw 75 errors in three minutes
+ * once went unnoticed, and why "the ladder is green" could not be read as "the
+ * editor is healthy". `--probe-composer` drives the real editor (focus, type,
+ * an `@` reference, optionally a submit) and writes one machine-readable
+ * `probe: {…}` line that `bin/composer-probe.mjs` reads back.
+ *
+ * `--probe-inject-error` throws inside the page on purpose: an instrument that
+ * cannot be shown to see an error proves nothing about the absence of one.
+ */
+const PROBE_COMPOSER = app.isPackaged !== true && cliSwitches.includes('--probe-composer');
+const PROBE_INJECT_ERROR = PROBE_COMPOSER && cliSwitches.includes('--probe-inject-error');
+const PROBE_SUBMIT = PROBE_COMPOSER && cliSwitches.includes('--probe-submit');
+
+/**
  * The language the CLI text below is written in.
  *
  * Only `--language` and `DSH_LANG` can reach here: the settings file is read
@@ -230,6 +248,17 @@ let anchorInfo = {};
 let nodeExePath = 'unknown';
 /** The port the current child reported, for the diagnostics bundle. */
 let currentPort = null;
+
+/**
+ * Page errors from the window that hosts the GUI, with the burst detector.
+ *
+ * The GUI reports its own uncaught errors to the console, and this shell logs
+ * them — but a log nobody is reading cannot tell a user that the editor inside
+ * the window has stopped working. Measured once: 75 errors in three minutes,
+ * 63 of them `Lexical error #20` inside three seconds, and the window simply
+ * looked slow until it was closed.
+ */
+const interfaceErrors = createErrorBurst();
 
 // ---------------------------------------------------------------------------
 // Logging. One file per run, under userData; the last ten are kept.
@@ -572,9 +601,273 @@ async function reportPageState() {
     log(`loaded: ${new URL(currentUrl).origin} — interface mounted: ${String(mounted)}`);
     if (mounted !== true) {
       showStatus(t('status.notRendered'), true);
+    } else if (PROBE_COMPOSER) {
+      void runComposerProbe();
     }
   } catch (error) {
     log(`could not inspect the loaded page: ${error.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The composer probe (development only; see PROBE_COMPOSER).
+//
+// Why this exists at all: the acceptance ladder starts a real harness, loads the
+// real interface and quits — without ever touching the editor. So a composer that
+// throws on every keystroke passes the ladder, and "0 page errors during the
+// ladder" says nothing about it. This drives the editor itself and reports what
+// it saw, in one machine-readable line the probe script reads back.
+//
+// It reports what it did, not what it hopes: which selector matched, whether the
+// typed text actually landed in the editor, and how many page errors arrived.
+// "Nothing happened" and "nothing was wrong" are different answers, and the
+// report has to be able to say the first one.
+// ---------------------------------------------------------------------------
+
+/** Where the composer lives in the GUI's DOM, most specific first. */
+const COMPOSER_SELECTORS = ['[data-lexical-editor="true"]', '[contenteditable="true"]'];
+
+/** Text the probe types. Inert on purpose: it is never submitted unless asked. */
+const PROBE_TEXT = 'desktop probe typing';
+
+/**
+ * The reference tokens the probe types.
+ *
+ * Two forms on purpose, because they reach the editor by different routes and
+ * the probe should say which one worked: `@probe-target/` matches the folder
+ * grammar on its own (`FOLDER_REF_RE` in the composer bundle), while the trailing
+ * `@p` is a plain trigger token, which is what opens the `@` menu. A trailing
+ * slash may suppress that menu, so the menu-triggering token comes last.
+ */
+const PROBE_REFERENCE = '@probe-target/ @p';
+
+/** How many errors `--probe-inject-error` throws: enough to be a burst, not one. */
+const PROBE_INJECT_COUNT = 25;
+
+/** Wait, in milliseconds. */
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Run one script in the GUI and parse its result.
+ *
+ * The page returns a JSON *string*: an earlier probe returned an object and
+ * failed with "An object could not be cloned", which is a property of
+ * `executeJavaScript`'s structured clone rather than of the page.
+ *
+ * @param script - an expression evaluating to a JSON string.
+ * @returns the parsed value.
+ */
+async function probeEval(script) {
+  return JSON.parse(String(await win.webContents.executeJavaScript(script, true)));
+}
+
+/**
+ * Find and focus the composer, waiting for it to exist.
+ * @param timeoutMs - how long to keep looking.
+ * @returns the selector that matched, or null.
+ */
+async function findComposer(timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (win === null || win.isDestroyed()) return null;
+    const found = await probeEval(`(() => {
+      const selectors = ${JSON.stringify(COMPOSER_SELECTORS)};
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (element !== null) {
+          element.focus();
+          return JSON.stringify({ selector });
+        }
+      }
+      return JSON.stringify({ selector: null });
+    })()`);
+    if (found.selector !== null) return found.selector;
+    await wait(500);
+  }
+  return null;
+}
+
+/** The composer's text, as the page sees it. */
+async function composerText() {
+  const read = await probeEval(`(() => {
+    const element = document.querySelector('[data-lexical-editor="true"]') ?? document.querySelector('[contenteditable="true"]');
+    return JSON.stringify({ text: element === null ? null : element.textContent });
+  })()`);
+  return read.text ?? '';
+}
+
+/** How many decorator nodes (a reference chip is one) are rendered. */
+async function decoratorCount() {
+  const read = await probeEval(
+    `(() => JSON.stringify({ n: document.querySelectorAll('[data-lexical-decorator="true"]').length }))()`,
+  );
+  return read.n;
+}
+
+/**
+ * Type into the composer, and confirm the text arrived.
+ *
+ * Real input events first, because that is what a keyboard produces; a fallback
+ * only if they do not land, and the method that worked is reported so a reader
+ * can tell "typed" from "did not type". A probe that cannot type must never
+ * report a healthy editor.
+ *
+ * @param text - what to type.
+ * @returns `sendInputEvent`, `insertText`, or null when neither landed.
+ */
+async function typeIntoComposer(text) {
+  for (const character of text) {
+    win.webContents.sendInputEvent({ type: 'char', keyCode: character });
+    await wait(25);
+  }
+  await wait(250);
+  if ((await composerText()).includes(text)) return 'sendInputEvent';
+  await probeEval(`(() => {
+    document.execCommand('insertText', false, ${JSON.stringify(text)});
+    return JSON.stringify({ ok: true });
+  })()`);
+  await wait(250);
+  return (await composerText()).includes(text) ? 'insertText' : null;
+}
+
+/**
+ * Press the first candidate the `@` menu is offering, if it is offering one.
+ *
+ * A real mouse press at the row's coordinates, not `element.click()`: the row
+ * carries `onMouseDown` (measured in `dsh-client-ui-input-trigger`), and a
+ * synthesized `click` event would never reach it. This is the only step that can
+ * put a reference chip into the editor — the chip is created by the pick, not by
+ * typing — and reaching it is the point of the probe.
+ *
+ * @param timeoutMs - how long to wait for a menu.
+ * @returns the pressed row's label and position, or null when no menu appeared.
+ */
+async function pickFirstTriggerOption(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let sawMenu = false;
+  let optionRows = 0;
+  while (Date.now() < deadline) {
+    if (win === null || win.isDestroyed()) return null;
+    const found = await probeEval(`(() => {
+      const menu = document.querySelector('[data-trigger-menu]');
+      const options = document.querySelectorAll('[role="option"]');
+      const option = options[0] ?? null;
+      if (option === null) {
+        return JSON.stringify({ x: null, y: null, label: null, menu: menu !== null, options: options.length });
+      }
+      const rect = option.getBoundingClientRect();
+      return JSON.stringify({
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+        label: (option.textContent ?? '').slice(0, 60),
+        menu: menu !== null,
+        options: options.length,
+      });
+    })()`);
+    sawMenu = sawMenu || found.menu === true;
+    optionRows = Math.max(optionRows, found.options ?? 0);
+    if (found.x !== null) {
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: found.x, y: found.y });
+      win.webContents.sendInputEvent({ type: 'mouseDown', x: found.x, y: found.y, button: 'left', clickCount: 1 });
+      win.webContents.sendInputEvent({ type: 'mouseUp', x: found.x, y: found.y, button: 'left', clickCount: 1 });
+      return found;
+    }
+    await wait(400);
+  }
+  // Saying which of the two happened matters: a menu that opened with no rows is
+  // a source that answered nothing, while no menu at all is a trigger that never
+  // fired. They point at different places.
+  return { x: null, y: null, label: null, menu: sawMenu, options: optionRows };
+}
+
+/**
+ * Throw inside the page on purpose, and report how many errors it produced.
+ *
+ * Enough errors to be a burst, not one: a single error proves the console
+ * plumbing works, while a burst is what the user's own failure looked like (63
+ * errors in three seconds) and what trips the offer to reload. Run last, because
+ * the dialog it opens is modal and would swallow the input the probe sends.
+ *
+ * @returns the number of page errors that arrived.
+ */
+async function injectProbeError() {
+  const before = interfaceErrors.summary(Date.now()).total;
+  await win.webContents.executeJavaScript(
+    `(() => {
+      for (let i = 0; i < ${String(PROBE_INJECT_COUNT)}; i += 1) {
+        setTimeout(() => { throw new Error('probe: intentional page error ' + String(i)); }, i * 20);
+      }
+      return 'scheduled';
+    })()`,
+    true,
+  );
+  await wait(1500);
+  return interfaceErrors.summary(Date.now()).total - before;
+}
+
+/**
+ * Drive the composer and write one `probe: {…}` line.
+ * @returns a promise settling once the line is written.
+ */
+async function runComposerProbe() {
+  const started = Date.now();
+  const errorsAtStart = interfaceErrors.summary(started).total;
+  const report = {
+    ok: false,
+    selector: null,
+    method: null,
+    typed: 0,
+    chips: 0,
+    picked: null,
+    editorText: '',
+    submit: PROBE_SUBMIT,
+    injectedErrors: 0,
+    newErrors: 0,
+    pageErrors: null,
+    error: null,
+  };
+  try {
+    report.selector = await findComposer();
+    if (report.selector === null) {
+      report.error = 'no composer element appeared in the interface';
+      return;
+    }
+
+    report.method = await typeIntoComposer(PROBE_TEXT);
+    if (report.method === null) {
+      report.error = 'typed text never reached the editor';
+      return;
+    }
+    report.typed = PROBE_TEXT.length;
+
+    const chipsBefore = await decoratorCount();
+    await typeIntoComposer(` ${PROBE_REFERENCE}`);
+    // Long enough for the trigger's lexicon to answer and any chip transform to
+    // settle — a chip that forms late must not be reported as absent.
+    await wait(1500);
+    report.picked = await pickFirstTriggerOption();
+    await wait(1200);
+    report.chips = Math.max(0, (await decoratorCount()) - chipsBefore);
+    report.editorText = (await composerText()).slice(0, 200);
+
+    if (PROBE_SUBMIT) {
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+      await wait(2000);
+      report.submitted = (await composerText()).trim() === '';
+    }
+    // Last, because the dialog it trips is modal and would swallow the input
+    // above. Reporting it as "the composer produced nothing" would then be a
+    // measurement of the probe, not of the editor.
+    if (PROBE_INJECT_ERROR) report.injectedErrors = await injectProbeError();
+    report.ok = true;
+  } catch (error) {
+    report.error = error.message;
+  } finally {
+    const summary = interfaceErrors.summary(Date.now());
+    report.newErrors = summary.total - errorsAtStart;
+    report.pageErrors = { inWindow: summary.inWindow, threshold: summary.threshold, byCode: summary.byCode };
+    log(`probe: ${JSON.stringify(report)}`);
   }
 }
 
@@ -716,6 +1009,63 @@ function notifyThroughTray() {
 }
 
 /**
+ * Note one page error, and offer a way out if they have become a cascade.
+ *
+ * The offer is deliberately a question rather than an action: reloading rebuilds
+ * the interface (which is what clears a corrupt editor) but throws away an
+ * unsent draft, and that trade is the user's to make, not the shell's.
+ *
+ * @param text - the console message.
+ * @returns nothing.
+ */
+function noteInterfaceError(text) {
+  const at = Date.now();
+  interfaceErrors.record(text, at);
+  if (!interfaceErrors.shouldOfferReload(at)) return;
+  // Latched before the dialog opens: the burst continues while the user reads,
+  // and a second dialog on top of the first would be the shell adding noise to
+  // the problem it is reporting.
+  interfaceErrors.markOffered();
+  void offerInterfaceReload();
+}
+
+/**
+ * Tell the user the interface is failing repeatedly, and offer to reload it.
+ *
+ * @returns a promise settling once the user has answered, or the attempt failed.
+ */
+async function offerInterfaceReload() {
+  const summary = interfaceErrors.summary(Date.now());
+  const seconds = Math.round(summary.windowMs / 1000);
+  const codes = Object.entries(summary.byCode)
+    .map(([code, count]) => (code === 'other' ? `other × ${String(count)}` : `#${code} × ${String(count)}`))
+    .join(', ');
+  log(`the interface is reporting repeated errors: ${String(summary.inWindow)} of one kind in ${String(seconds)}s (${codes})`);
+  if (win === null || win.isDestroyed()) return;
+  if (!win.isVisible()) win.show();
+  try {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: APP_NAME,
+      message: t('dialog.interfaceTitle'),
+      detail: t('dialog.interfaceDetail', { count: summary.inWindow, seconds, codes }),
+      buttons: [t('dialog.interfaceReload'), t('dialog.interfaceIgnore')],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (response === 0 && !win.isDestroyed()) {
+      log('reloading the interface at the user\'s request');
+      win.webContents.reload();
+    } else {
+      log('the user chose to ignore the repeated interface errors');
+    }
+  } catch (error) {
+    log(`could not present the interface-error dialog: ${error.message}`);
+  }
+}
+
+/**
  * Create the shell window and show the loading page until the harness is ready.
  * @returns the created window.
  */
@@ -779,6 +1129,9 @@ function createWindow() {
         ? ` (${event.sourceId}:${String(event.lineNumber ?? '?')})`
         : '';
     log(`[page:${severity}] ${redactToken(truncateForLog(text))}${where}`);
+    // Counting is separate from logging: the log is for a reader afterwards, the
+    // count is for the user who is looking at a window that has stopped working.
+    if (severity === 'error') noteInterfaceError(text);
   });
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     log(

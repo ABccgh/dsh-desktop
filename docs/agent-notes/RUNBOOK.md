@@ -63,17 +63,51 @@ ladder ran the build that is installed now" are two different claims and only th
 checked. The ladder reads the shell's own `dsh: <version> at <dir>` line and compares it with the
 anchor's manifest, so a stale anchor or a child started from somewhere else fails instead of passing.
 
+## Drive the composer (the ladder never touches it)
+
+The acceptance ladder mounts the interface and quits, so it cannot see the editor at all — a composer that
+threw 75 errors in three minutes once passed it. This drives the real editor in a real launch:
+
+```powershell
+npm run probe                     # type, open the @ menu, pick a candidate (inserts a chip); no submit
+npm run probe -- --submit         # also press Enter: ONE REAL MODEL CALL, in a scratch workspace
+npm run probe -- --inject-error   # self-test: throw 25 errors into the page and require the shell to react
+npm run probe -- --keep           # leave the window open for inspection (then close it by hand)
+```
+
+What it prints, and how to read it: `selector` (which element it found), `typed via` (real input events or
+the `insertText` fallback), `editor text` (proof the text landed), `chips` (a chip inserted by the menu
+pick), `@ menu` (whether the menu opened and how many rows it offered), `page errors` (by code), and
+`burst offer` (whether the shell decided this was a cascade).
+
+**Exit codes are the point:** `0` the composer was driven; `2` **UNREADABLE** — nothing was compared (no
+report line, the text never landed, the app never mounted), which is not a pass; `1` unhealthy (a burst
+arrived, or with `--inject-error` the instrument saw nothing / the shell did not react). With
+`--inject-error` the verdict is about the instrument, never about the composer — those errors are the
+probe's own.
+
+It creates a scratch workspace under `%TEMP%`, and puts `lastWorkspace` back afterwards so the user's next
+launch does not open there. It refuses to start when another instance is running (that would take the
+single-instance lock and produce a report about the wrong window).
+
+Two side effects worth knowing before running it: the workspace is removed when the probe finishes, but a
+`--submit` run leaves **one session** in the GUI's own workspace list (the GUI remembers its workspace in
+its persistent partition, so that is where its sessions go) — remove it in the GUI if it matters. And the
+probe does not delete anything under `%USERPROFILE%\.dsh`: that is the user's tree, and the shell's rule is
+to write nothing there.
+
 ## After a DSH upgrade
 
 The shell pins no DSH version: it resolves
 `$DSH_HOME/profiles/node_modules/@deepseek-ai/dsh` through `realpathSync` on every launch, so an
 upgrade is picked up by the next start with nothing to change here. What an upgrade *can* move is the
-ground under the shell's contracts, and that is what these three commands are for, in this order:
+ground under the shell's contracts, and that is what these commands are for, in this order:
 
 ```powershell
 npm run surface       # 1. is the coupling surface still the bytes last read and measured?
 node --test test/     # 2. the pure half, ~0.4 s
 npm run smoke:dev     # 3. a real launch; then `npm run pack` and `npm run smoke` for the artifact
+npm run probe         # 4. the editor, which the ladder never touches (see the section above)
 ```
 
 Read `surface` as a **trigger, not a verdict**: `CHANGED`/`MOVED` names files whose change means "go

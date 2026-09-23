@@ -96,6 +96,22 @@ const SURFACE = [
     pattern: 'dsh-web-frontend/dist/favicon.svg',
     why: 'the source of the app`s icon, read at build time by tools/make-icon.mjs',
   },
+  {
+    pattern: 'dsh-client-ui-conversation/lib/client.js',
+    why: 'the composer: its Lexical editor, the text-ref transform pair and the claim decoration — the code the 2026-09-23 error burst came from (bundled lexical 0.49.0 included)',
+  },
+  {
+    pattern: 'dsh-client-ui-input-trigger/lib/client.js',
+    why: 'the `@` / `/` menu: the trigger lexicon the composer`s reference scan reads, and the pick that creates a chip',
+  },
+  {
+    pattern: 'dsh-client-ui-chat/lib/client.js',
+    why: 'the surrounding turn UI; it changed between rc.1 and rc.3 (a CSS margin) while the composer did not, which is how "the upgrade did not touch the editor" was established',
+  },
+  {
+    pattern: 'dsh-client-ui-attachment/lib/client.js',
+    why: 'attachments are inserted into the same composer document as decorator nodes',
+  },
 ];
 
 /**

@@ -23,6 +23,7 @@
     "icon": "electron tools/make-icon.mjs",
     "pack": "node bin/pack.mjs",
     "surface": "node bin/dsh-surface.mjs",
+    "probe": "node bin/composer-probe.mjs",
     "installer": "electron-builder --win nsis --config electron-builder.yml",
     "shortcut": "pwsh -NoProfile -File bin/shortcut.ps1"
   },

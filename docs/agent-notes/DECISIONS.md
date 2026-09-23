@@ -593,5 +593,45 @@ would reverse it. Never rewrite an entry; supersede it with a new one.
   module that owns that contract (`src/url-line.mjs`, `src/main.js`) — never a relaxation of the check.
   The two couplings that remain unchecked are written down in `PROJECT.md`.
 
+## D-31: What does this project do about a defect inside DSH's own client code?
+
+- **Decided:** three things, and deliberately **not** a fourth. (1) Build the instrument the acceptance
+  ladder lacks — `npm run probe` drives the real composer and reports page errors by code, with
+  `--inject-error` falsifying the instrument itself. (2) Give the shell the one lever it actually owns:
+  when a burst of one kind of page error arrives, **offer** to reload the interface (a question, never an
+  automatic action). (3) Write `docs/agent-notes/UPSTREAM-dsh-composer-lexical.md` — evidence, mechanism,
+  what was tried, what was not — to be forwarded. **Not:** edit the installed package.
+- **Because the defect is in a published package, and every available local edit is worse than the bug.**
+  `@deepseek-ai/dsh-client-ui-conversation/lib/client.js` lives in this machine's npx cache: editing it is
+  reverted by the next DSH update, leaves the running harness byte-different from the published package
+  with no record of how, and breaks the rule that this shell never writes under `%USERPROFILE%\.dsh`. A
+  client plugin cannot reach the composer either — that package exports only `apply`/`inject`, so there is
+  no surface to patch from outside. What *is* within reach is the shell's own window: it can say what is
+  happening and rebuild the page.
+- **Because "the ladder is green" was the actual failure here, and it was a missing instrument rather than
+  a missing fix.** The ladder mounts the interface and quits without touching the editor, so a composer
+  that threw 75 errors in three minutes passed it. The probe closes that gap with the steps that matter —
+  focus, real input events, the `@` menu pick that creates a chip (measured: a real mouse press, because
+  the row's handler is `onMouseDown` and `element.click()` never reaches it), and submit — and it reports
+  what it could **not** drive as `UNREADABLE`, exit 2, never as 0.
+- **The dialogue is a question because reloading costs something.** It rebuilds the editor (which is what
+  clears the corrupt state) but discards an unsent draft. Both halves of that are in the message text, in
+  both languages, and the log records the answer either way.
+- **Measured, so the record does not have to be trusted:** rc.1 and rc.3 are byte-identical across all
+  fourteen client bundles in the editor stack — the upgrade carried no fix — and the rc.3 probe run drove
+  typing, a folder-form reference, a menu pick (chip inserted) and a submit with **0 page errors**. The
+  burst was **not** reproduced; the claim/queue phase flip is the untested path.
+- **Rejected:** (1) patching the cached package — see above; (2) a client plugin that monkey-patches
+  another package's internals — no hook exists, and it would rot silently at the next upgrade; (3)
+  auto-reload without asking — it loses a draft the user did not agree to lose; (4) making the composer
+  part of the acceptance ladder — the ladder is the shell's contract with the harness, the composer is
+  DSH's interface, and folding it in would add a slow check to the wrong gate; (5) waiting for upstream:
+  the byte comparison proves an upgrade does not carry the fix, and an unreproduced bug is not a report
+  anyone can act on.
+- **Reversed by:** a reproduction, in which case the report becomes a patch proposal with the editor state
+  that triggers it; or a DSH release that changes `dsh-client-ui-conversation`, which `npm run surface`
+  now reports (the composer's bundle is in the baseline) and after which the probe should be re-run before
+  its old reading is quoted.
+
 
 

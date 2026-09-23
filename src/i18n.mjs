@@ -71,6 +71,10 @@ export const MESSAGE_IDS = Object.freeze([
   'dialog.restart',
   'dialog.showLogs',
   'dialog.dismiss',
+  'dialog.interfaceTitle',
+  'dialog.interfaceDetail',
+  'dialog.interfaceReload',
+  'dialog.interfaceIgnore',
   'harness.exited',
   'harness.gaveUp',
   'harness.bootTimeout',
@@ -225,6 +229,13 @@ export const MESSAGES = Object.freeze({
     'dialog.restart': '重启 DSH',
     'dialog.showLogs': '显示日志',
     'dialog.dismiss': '关闭',
+    'dialog.interfaceTitle': '界面里的输入框正在反复报错',
+    'dialog.interfaceDetail':
+      'DeepSeek Harness 的界面在最近 {seconds} 秒里报出了 {count} 条同类错误（{codes}）。' +
+      '这通常意味着编辑器进入了损坏状态：继续输入会一直报错，界面看起来像是卡住了。\n\n' +
+      '重新载入界面通常就能恢复。对话内容保存在 harness 一侧，不会丢失；没有发送出去的草稿会丢失。',
+    'dialog.interfaceReload': '重新载入界面',
+    'dialog.interfaceIgnore': '忽略',
     'harness.exited': 'harness 退出了（退出码={code} 信号={signal}）。',
     'harness.gaveUp': '{reason} 它连续退出了 {count} 次，因此本外壳已停止重启它。',
     'harness.bootTimeout':
@@ -373,6 +384,14 @@ Closing the window quits unless closeToTray is set in
     'dialog.restart': 'Restart DSH',
     'dialog.showLogs': 'Show Logs',
     'dialog.dismiss': 'Dismiss',
+    'dialog.interfaceTitle': 'The composer in the interface is failing repeatedly',
+    'dialog.interfaceDetail':
+      'The DeepSeek Harness interface reported {count} errors of one kind in the last {seconds} seconds ({codes}). ' +
+      'That usually means the editor is in a broken state: typing keeps failing and the window can look stuck.\n\n' +
+      'Reloading the interface normally recovers it. The conversation lives on the harness side and is not lost; ' +
+      'a draft that has not been sent is.',
+    'dialog.interfaceReload': 'Reload the interface',
+    'dialog.interfaceIgnore': 'Ignore',
     'harness.exited': 'The harness exited (code={code} signal={signal}).',
     'harness.gaveUp': '{reason} It exited {count} times in a row, so this shell has stopped restarting it.',
     'harness.bootTimeout':

@@ -74,6 +74,7 @@ npm start                        # 从源码运行
 npm test                         # 101 个测试，只覆盖纯模块，约 0.4 秒
 npm run smoke                    # 针对打包产物的验收阶梯（20 项检查）
 npm run surface                  # 装着的 DSH 还是当初验证过的那一面吗？
+npm run probe                    # 驱动界面里的输入框并报告页错误（仅开发）
 npm start -- "D:\some\project"   # 以该文件夹为工作区启动
 npm start -- --settings          # 启动时打开设置窗口
 npm start -- --language en       # 仅本次运行强制指定语言
@@ -89,6 +90,12 @@ npm start -- --language en       # 仅本次运行强制指定语言
 这条命令把它们与 `docs/agent-notes/dsh-surface.json`（记录着上次读过并实测过的那些字节）逐字节比较。
 报出 `CHANGED` 是**去读一遍的触发条件**，不是「契约坏了」的判决。
 
+`npm run probe` 补上验收阶梯够不到的那一块：阶梯只挂载界面就退出，**从不碰编辑器**，所以一个每次敲键
+都报错的输入框照样能通过它。探针会聚焦真正的编辑器、用真实输入事件打字、打开 `@` 菜单并按下其中一个候
+选项（这会插入一个引用 chip），可选再按回车发送，然后按错误码报告页错误。凡是它**没能真正驱动**编辑
+器的情况，它一律以 **2（UNREADABLE）** 退出而不是 0；`--inject-error` 会往页面里抛错误，用来证明仪器
+本身有效。`--submit` 是一次真实的模型调用，且发生在一次性工作区里。
+
 设 `DSH_DESKTOP_DIAG=1` 会让启动过程探测并记录每一层网络能否到达 harness。窗口加载不出来时，
 这是第一个该看的地方。
 
@@ -98,7 +105,7 @@ npm start -- --language en       # 仅本次运行强制指定语言
 | --- | --- |
 | `src/` | 外壳本体：Electron 主进程、子进程监督器、纯模块、两个页面 |
 | `src/i18n.mjs` | 外壳会显示的所有文案（中英两份），以及语言解析器 |
-| `bin/` | `pack.mjs`（便携打包）、`smoke.mjs`（验收）、`dsh-surface.mjs`（外壳与 DSH 的耦合面）、`shortcut.ps1`（系统集成） |
+| `bin/` | `pack.mjs`（便携打包）、`smoke.mjs`（验收）、`dsh-surface.mjs`（外壳与 DSH 的耦合面）、`composer-probe.mjs`（驱动阶梯够不到的编辑器）、`shortcut.ps1`（系统集成） |
 | `tools/make-icon.mjs` | SVG → PNG → ICO，并核对载荷大小与声明一致 |
 | `test/` | `node --test`；凡是能做成纯函数的模块都做成纯的，好让它不碰磁盘就能测 |
 | `docs/agent-notes/` | 设计背后的实测记录：runbook、chronicle、decisions、board，以及 `npm run surface` 用来比较的 `dsh-surface.json` |

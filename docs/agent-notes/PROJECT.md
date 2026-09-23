@@ -97,6 +97,7 @@ this file for what was re-measured and what did not change.**
 | `src/diagnostics.mjs` | The support bundle: versions, paths, windows, config, state, log tail — redacted field by field |
 | `src/paths.mjs` | `DSH_HOME`, the installation anchor, the Node executable, the workspace in argv |
 | `src/restart-policy.mjs` | When a crash loop must stop |
+| `src/error-burst.mjs` | Counting the GUI's page errors and deciding when they look like a cascade — pure, so the real 2026-09-23 sequence can be replayed against it |
 | `src/loading.html` | The pre-harness page and the failure page |
 | `src/settings.html`, `src/settings-preload.cjs` | The settings window and its bridge — sandboxed, so the preload must be CommonJS |
 | `src/icon.svg` | Not present: the mark is read from the installed DSH frontend favicon at build time |
@@ -104,6 +105,7 @@ this file for what was re-measured and what did not change.**
 | `bin/pack.mjs` | Portable packaging into `dist\DSH Desktop\`, including exe icon and version via rcedit's binary |
 | `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) — **20 checks**, including which DSH version the child actually was |
 | `bin/dsh-surface.mjs` | The coupling surface: which installed DSH files this shell's contracts live in, compared against the bytes last read and measured (`npm run surface`) |
+| `bin/composer-probe.mjs` | Driving the real composer in a real launch and reporting what came back (`npm run probe`) — the ladder never touches the editor, which is exactly how the 2026-09-23 burst went unnoticed |
 | `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
 | `electron-builder.yml` | The NSIS installer target — **configured, never built** |
 | `test/*.test.mjs` | 101 tests over the pure modules (`npm test`, ~0.35 s) |
@@ -460,5 +462,110 @@ file → `MOVED` + exit 1; a missing baseline → `CANNOT CHECK` + exit 2.
 while the user was working in the GUI — plausibly the reason DSH was updated at all. Under rc.3 the
 ladder logs **0**, but the ladder mounts the interface and quits without touching the editor, so that is
 not evidence the error is gone; it is evidence that the ladder does not exercise that path. Recorded
-rather than claimed.
+rather than claimed. **Superseded by the next section, which diagnoses it and builds the instrument the
+ladder lacks.**
+
+## The composer failure, diagnosed and instrumented (2026-09-23)
+
+Asked for as "解决这个问题" against that last sentence: the errors had happened once, the ladder could not
+see the editor at all, and nothing in this project could say whether the upgrade had changed anything.
+What follows is the diagnosis, the instrument, and — stated plainly — the one thing that is still not
+known.
+
+**The failure's shape, from the log's 75 lines.** Two phases, and they are not the same event:
+
+| Time | Count | Codes | Gaps |
+| --- | --- | --- | --- |
+| 22:49:12–22:50:04 | 8 | `#14` | 1.93 / 31.79 / 3.88 / 4.63 / 7.25 / 2.81 s — irregular, so **one per edit** |
+| 22:50:04 → 22:51:55 | 0 | — | 110 s of silence: no input |
+| 22:51:55–22:51:58 | 61 | `#66` → `#19` → 59 × `#20` | 21/19/17 in consecutive seconds — **one cascade** |
+| 22:52:06 | 6 | `#20` | a second, smaller wave |
+
+The codes, from Lexical 0.49.0's own error table (that is the version bundled in
+`dsh-client-ui-conversation`): `#14` "transforms endlessly triggering additional transforms", `#66`
+"expected node to have a parent", `#19` "selection lost because the selected nodes were removed", `#20`
+"`Point.getNode`: node not found" (63 of the 75).
+
+**The throwing site was found by reconstructing the served bundle, not by guessing.** The log's
+`(…:63857)` is a line in the concatenated `/plugins/??…` response. `dsh-client-modules/lib/index.js:278-314`
+(`buildCombo`) states the rule — strip the `sourceURL`/`sourceMappingURL` trailers, ensure a trailing
+newline, append `;\n` per package — and rebuilding the 55 packages from that URL (128 725 lines) puts line
+63 857 at offset 12 678 of `dsh-client-ui-conversation/lib/client.js`, which is:
+
+```js
+this.editor = ys({                        // createEditor
+    namespace: "dsh-composer",
+    nodes: [ReferenceChipNode, TextRefNode],
+    onError: (error) => { throw error; }, // ← 63857: why these surface as UNCAUGHT
+});
+```
+
+So they come from the composer's editor, and they are uncaught because DSH's own `onError` rethrows what
+Lexical's boundary hands it. That is the reporting site. **The same package file is readable** (16 864
+lines, not minified), so the upstream code could be read rather than inferred.
+
+**The mechanism (read from the code — this is the part that is not reproduced).** Three registrations on
+that editor can disagree: the text-entity transform pair (`:12102-12154`; the `TextRefNode` transform
+**reverts a chip to plain text** unless `getMatch(text) !== null && r.start === 0 && text.length === r.end`,
+`:12146-12149`), `getMatch` itself (`:12294-12307`, which skips a range only while the **claim token** sits
+at offset 0 and equals the text — `:12298`), and the claim decoration plus its dirty-nudger
+(`:12051-12069`, `:12077-12081`, whose comment says claims change phase *without a text edit*). When the two
+predicates disagree about one span — the live lexicon moved, the claim flipped, or the chip's text is a
+strict prefix of a longer match — the span alternates chip → text → chip, and every swap replaces nodes, so
+the caret's key stops existing: `#20` per access, with `#66`/`#19` at the replacement. That fits the
+timeline above; it is a hypothesis, and it is labelled as one.
+
+**rc.3 does not fix it, and that is measured, not assumed.** Fourteen client bundles compared byte for byte
+between rc.1 (pulled from the registry and unpacked in memory) and the installed rc.3 — the composer, the
+trigger menu, the attachment, reference, commands, renderer, tool, session and HMR packages, plus the host
+skill/file-reference/file-upload packages. **All identical.** The only difference in the whole stack is one
+CSS declaration in `dsh-client-ui-chat/lib/client.js`. So the update carried no fix, and "0 page errors
+since" would have been an empty claim.
+
+**The instrument.** `npm run probe` (`bin/composer-probe.mjs` + a development-only `--probe-composer`
+switch in `src/main.js`) launches a real shell in a scratch workspace and drives the **real composer**:
+
+| Step | How | Reading it produced |
+| --- | --- | --- |
+| find and focus the editor | `[data-lexical-editor="true"]`, waited for | selector matched |
+| type 20 characters | `webContents.sendInputEvent` (real input events) | text read back from the editor |
+| type `@probe-target/` (folder grammar) and `@p` | same | the `@` menu **opened with 70 candidates** |
+| press the first candidate | **real mouse press at its coordinates** — the row carries `onMouseDown`, so `element.click()` would never reach it | **`chips: 1`** (a `ReferenceChipNode` was inserted) |
+| press Enter | `sendInputEvent` | `submitted: true` (the composer cleared) |
+
+Against rc.3 that whole sequence produced **0 page errors**, twice. That is the honest result: it does
+**not** reproduce the burst, and it does **not** mean the burst is gone — the untested path is the one the
+timing implicates, the claim/queue phase flip (a draft holding a reference token while a message is queued,
+then the claim clearing). `--submit` exercises one send; the flip needs a second submit while a turn is
+still running.
+
+**The instrument is falsified in the same command, because an instrument that cannot fail proves nothing.**
+`npm run probe -- --inject-error` throws 25 errors into the page and requires both that the detector sees
+them and that the shell acts on them — the clean run reports `burst offer: not triggered`, the injected run
+reports `20 of one kind in 10s (other × 20)`. The probe also refuses to call anything healthy that it could
+not drive: no report line, or text that never landed, exits 2 with `UNREADABLE`, never with 0.
+
+**The shell's half: it now says when the editor has stopped working.** `src/error-burst.mjs` (pure) counts
+page errors per kind inside a 10 s window and reports a cascade at 20 of one kind; `src/main.js` then
+**offers** a reload — a question, not an action, because a reload rebuilds the editor but loses an unsent
+draft, and that trade is the user's. Once per run; the log line is written even when the dialog cannot be
+shown. The detector's regression is the real sequence: fed the 75 measured timestamps it stays **silent
+through the eight `#14`s** (a detector that spoke up there would interrupt someone who was merely typing)
+and speaks up inside the `#20` cascade.
+
+**Why the fix is not here.** The defective code is a published package in this machine's npx cache. Editing
+it there would be reverted by the next update, would leave the running harness byte-different from the
+published package with no record of how, and would break the shell's own rule of never writing under
+`%USERPROFILE%\.dsh`. A client plugin cannot reach the composer either — the package exports only
+`apply`/`inject`. So the deliverable is `docs/agent-notes/UPSTREAM-dsh-composer-lexical.md`: the evidence, the
+mechanism, what has been tried, what has not, and the shape of a fix — to be forwarded, not applied.
+
+**And the coupling surface now covers the editor**, so the next upgrade answers "did it touch the composer?"
+in one command: `bin/dsh-surface.mjs` gained the four client bundles (12 → **16 patterns, 17 files**), and
+`npm run surface` reports 16/16 identical against the recorded baseline.
+
+**What remains unknown, stated so it is not read as a pass:** whether the burst still happens, and what
+exactly triggered it. The probe would catch it if it happened while the probe runs; nothing watches the
+user's own sessions.
+
 

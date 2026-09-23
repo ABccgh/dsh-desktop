@@ -83,6 +83,7 @@ npm start                        # run from source
 npm test                         # 101 tests over the pure modules, ~0.4 s
 npm run smoke                    # the acceptance ladder (20 checks) against the packaged build
 npm run surface                  # is the installed DSH still the surface this was verified against?
+npm run probe                    # drive the GUI's composer and report its page errors (dev only)
 npm start -- "D:\some\project"   # start with that folder as the workspace
 npm start -- --settings          # open with the settings window showing
 npm start -- --language en       # force the shell's language, for one run
@@ -100,6 +101,14 @@ the shell stands on: the readiness line, the argv, the port schema, the auth-coo
 compares those files against `docs/agent-notes/dsh-surface.json`, which records the bytes last read
 and measured. A `CHANGED` line is a trigger to go and read, not a verdict that something broke.
 
+`npm run probe` covers what the acceptance ladder cannot: the ladder mounts the interface and quits
+without ever touching the editor, so a composer that fails on every keystroke still passes it. The probe
+focuses the real editor, types with real input events, opens the `@` menu and presses a candidate (which
+inserts a reference chip), and optionally presses Enter — then reports page errors by code. It exits **2
+(UNREADABLE)** rather than 0 whenever it could not actually drive the editor, and `--inject-error` throws
+errors into the page so the instrument itself can be shown to work. `--submit` is one real model call,
+in a scratch workspace.
+
 Set `DSH_DESKTOP_DIAG=1` to have startup probe, and log, whether each network layer can reach the
 harness. It is the first thing to reach for when the window does not load.
 
@@ -109,7 +118,7 @@ harness. It is the first thing to reach for when the window does not load.
 | --- | --- |
 | `src/` | The shell: Electron main, the child supervisor, the pure modules, the two pages |
 | `src/i18n.mjs` | Every string the shell shows, in Chinese and English, plus the language resolver |
-| `bin/` | `pack.mjs` (portable build), `smoke.mjs` (acceptance), `dsh-surface.mjs` (what the shell couples to in DSH), `shortcut.ps1` (integration) |
+| `bin/` | `pack.mjs` (portable build), `smoke.mjs` (acceptance), `dsh-surface.mjs` (what the shell couples to in DSH), `composer-probe.mjs` (drives the editor the ladder never touches), `shortcut.ps1` (integration) |
 | `tools/make-icon.mjs` | SVG → PNG → ICO, with the payload size checked against the declared one |
 | `test/` | `node --test`; every module that can be pure is pure so it can be tested without a disk |
 | `docs/agent-notes/` | The measurements behind the design: runbook, chronicle, decisions, board — and `dsh-surface.json`, the DSH surface `npm run surface` compares against |

@@ -62,11 +62,18 @@ whose rule 7 is "this repo ships presets and nothing else". Do not move it in.
 - **A DSH upgrade is a verification, not an edit — and the shell must never pin a DSH version.**
   `resolveInstallAnchor` follows the junction the harness maintains, so a new DSH arrives on its own
   and the one thing that can go stale is the ground under the contracts. The order is
-  `npm run surface` → `node --test test/` → `npm run smoke:dev` → `npm run pack` → `npm run smoke`, and
-  only then `npm run surface -- --record` (see `RUNBOOK.md`). A `CHANGED` line is a **trigger to go and
-  read**, not a verdict: `surface` compares bytes, and which contract broke is a question only reading
-  the file can answer. Measured once end to end on 2026-09-23 (rc.1 → rc.3, surface byte-identical,
-  20/20 twice) — D-30.
+  `npm run surface` → `node --test test/` → `npm run smoke:dev` → `npm run pack` → `npm run smoke` →
+  `npm run probe`, and only then `npm run surface -- --record` (see `RUNBOOK.md`). A `CHANGED` line is a
+  **trigger to go and read**, not a verdict: `surface` compares bytes, and which contract broke is a
+  question only reading the file can answer. Measured once end to end on 2026-09-23 (rc.1 → rc.3,
+  surface byte-identical, 20/20 twice) — D-30.
+- **The GUI's console errors are the user's only evidence that the editor has stopped working, and the
+  ladder cannot produce them.** `src/error-burst.mjs` counts them per kind in a 10 s window and the shell
+  offers a reload at 20 of one kind. Three rules came out of the 2026-09-23 burst (D-31): a defect inside
+  a published DSH package is **reported, never patched in the npx cache**; the offer is a **question**
+  because a reload loses an unsent draft; and `npm run probe` must exit **2 (UNREADABLE)** rather than 0
+  whenever it could not actually drive the editor — a green verdict from a driver that drove nothing is
+  the failure this whole instrument exists to prevent.
 - **Every user-visible string goes through `src/i18n.mjs`, and a `role:` menu item is not exempt.**
   Measured on Electron 44.3.0: `{ role: 'reload' }` and its six siblings render English labels on
   Windows no matter what language the app runs in, so each one carries an explicit `label:` here —
@@ -99,6 +106,7 @@ npm run pack        # dist\DSH Desktop\DSH Desktop.exe — portable, no extra to
 npm run smoke       # the acceptance ladder against the packaged build (needs pack first)
 npm run smoke:dev   # the same ladder against `electron .`
 npm run surface     # is the installed DSH still the surface this was verified against?
+npm run probe       # drive the GUI's composer and report its page errors (dev only; the ladder does not touch it)
 ```
 
 `npm install` installs Electron; the project's own `postinstall` then fetches and extracts its binary.
@@ -117,12 +125,14 @@ npm run surface     # is the installed DSH still the surface this was verified a
 | `src/config.mjs` | Settings: defaults, validation, per-field fallback |
 | `src/paths.mjs` | `DSH_HOME`, the installation anchor, the Node executable, and the workspace in argv |
 | `src/restart-policy.mjs` | When a crash loop must stop |
+| `src/error-burst.mjs` | Counting the GUI's page errors per kind, and deciding when they are a cascade worth offering a reload for |
 | `src/diagnostics.mjs` | The support bundle — redacted field by field, never assembled from raw state |
 | `src/loading.html` | The pre-harness page and the failure page |
 | `src/settings.html`, `src/settings-preload.cjs` | The settings window and its bridge; `sandbox: true` means the preload must be CommonJS |
 | `bin/pack.mjs` | Portable packaging into `dist\DSH Desktop\`; calls rcedit's **binary**, not its missing wrapper |
 | `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`); its 20th check ties a green run to the installed DSH version |
 | `bin/dsh-surface.mjs` | The DSH files this shell's contracts live in, compared with the bytes last read and measured (`npm run surface`, baseline `docs/agent-notes/dsh-surface.json`) |
+| `bin/composer-probe.mjs` | Drives the GUI's composer in a real launch and reports what came back (`npm run probe`); the ladder never touches the editor |
 | `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
 | `tools/make-icon.mjs` | Icon: SVG → PNG (via an offscreen Electron window) → ICO |
 | `electron-builder.yml` | The NSIS installer target — **configured, never built**; `bin/pack.mjs` is the supported path |

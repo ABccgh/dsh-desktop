@@ -21,6 +21,7 @@ complete and verified; M3 is not started and the NSIS installer half of M5 has n
 | **M7** the Chinese interface (`src/i18n.mjs`, a language switch, `--language`) | **done, verified end to end** — 101 tests, **19/19 on the packaged build** (`npm run smoke`) and 19/19 from source; reviewed adversarially, and the eight findings that survived re-checking are fixed — see D-21…D-27 |
 | **Tidy-up** dead controls, stale docs, `README.zh.md`, publish | **done** — see D-28/D-29 and `PROJECT.md` |
 | **DSH 0.1.5-rc.1 → rc.3** re-verify, rebuild the artifact, make the coupling surface checkable | **done, verified** — the coupling files are byte-identical, both ladders **20/20**, the icon measured (unchanged), the exe rebuilt at 0.1.1; `bin/smoke.mjs` gained a version check and `bin/dsh-surface.mjs` is new, both falsified. See D-30 and the section at the end of `PROJECT.md` |
+| **The composer's 75 Lexical errors** | **diagnosed, instrumented, not fixed** — the throwing site (`dsh-composer`'s `onError` rethrow) and the mechanism are named in `PROJECT.md`; `npm run probe` now drives the real editor (typing, `@` menu pick → chip, submit) and produced **0 errors** on rc.3, so the burst was **not** reproduced; the shell offers a reload on a burst; the upstream report is `docs/agent-notes/UPSTREAM-dsh-composer-lexical.md`. See D-31 |
 
 ## M7, after the adversarial review
 
