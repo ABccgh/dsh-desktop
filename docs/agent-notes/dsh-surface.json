@@ -1,0 +1,91 @@
+{
+  "dshVersion": "0.1.5-rc.3",
+  "recordedAt": "2026-09-23T15:11:13.729Z",
+  "patterns": [
+    {
+      "pattern": "dsh/lib/bin.js",
+      "why": "the CLI entry the anchor resolves: `--profile web` and the pass-through of `--port`/`--no-open` (src/args.mjs)",
+      "files": {
+        "dsh/lib/bin.js": "0ff7f1d72c4e0cbe14001709c81e20a04b70464118a7f78568952988e28f2ac5"
+      }
+    },
+    {
+      "pattern": "dsh/lib/profile-boot-*.js",
+      "why": "runProfile installs installFailLoud, which is why the harness runs in a child process at all (AGENTS.md fact 1)",
+      "files": {
+        "dsh/lib/profile-boot-BP_C0vpU.js": "1c8ff3e931a29a8f4e54a4db197935aa0d5f6bfbd4275a487bfff576d600ca69",
+        "dsh/lib/profile-boot-Dk-7KqJc.js": "8b79b5c70281f23153ecc1828ba9b6e7b48364cc71409c90f12bde4cc4d7cde0"
+      }
+    },
+    {
+      "pattern": "dsh-web-app/lib/index.js",
+      "why": "the readiness line the shell parses out of the child`s stdout (src/url-line.mjs)",
+      "files": {
+        "dsh-web-app/lib/index.js": "f93d006de823bad3e287062a3c8f23e975fab16968e7cbd04540d3568ee41026"
+      }
+    },
+    {
+      "pattern": "dsh-web-app/lib/startup.js",
+      "why": "the flag surface: `--port <n>` (0 means \"let the OS pick\") and `--no-open` (src/args.mjs)",
+      "files": {
+        "dsh-web-app/lib/startup.js": "95a47053483fbe8ec86711369b8791bccb592c303fcc89300458a4bd07c6c252"
+      }
+    },
+    {
+      "pattern": "dsh-web-app/cordis.patch.yml",
+      "why": "the port fallback `ctx.webStartup.port ?? 3080`, which must stay nullish for `--port 0` to survive",
+      "files": {
+        "dsh-web-app/cordis.patch.yml": "1c0209b817d05d25ed9857c8d9611fa631301f1b9593e871f23595e83b17261d"
+      }
+    },
+    {
+      "pattern": "dsh-host-webserver/lib/index.js",
+      "why": "the webserver schema: `port` must keep accepting 0, or the OS-assigned port silently becomes a fixed one",
+      "files": {
+        "dsh-host-webserver/lib/index.js": "040500dc252b5c0f1e8f577af873e1ac4a38a554d2e6dc2f8c5a4c8d2245be4d"
+      }
+    },
+    {
+      "pattern": "dsh-client-connection/lib/index.js",
+      "why": "the auth fence (401 for a clean root, 303 + Set-Cookie for a token URL) and the `dsh-auth-` cookie prefix the shell sweeps (src/main.js)",
+      "files": {
+        "dsh-client-connection/lib/index.js": "bbe7c9aa6d82a7a4ec657aa8bc51064e12bb091be0465526d0b9f5e031f540f7"
+      }
+    },
+    {
+      "pattern": "dsh-app-boot/lib/index.js",
+      "why": "the fail-loud kill switch, and the rule that a `DSH_*` variable may not come from an environment file (src/paths.mjs)",
+      "files": {
+        "dsh-app-boot/lib/index.js": "d8fdfe41996a4fefcff63af4982787924b0ae651f24bb1402f775b70202529bb"
+      }
+    },
+    {
+      "pattern": "dsh-client-locale/lib/client.js",
+      "why": "the GUI`s language rule — exact id, then primary subtag — which the shell`s own resolver mirrors (src/i18n.mjs)",
+      "files": {
+        "dsh-client-locale/lib/client.js": "cff36c3b5f57b0f26223943f1f176cc519c2624f49743afff71718565f88e77e"
+      }
+    },
+    {
+      "pattern": "dsh-host-directory-picker-auto/README.md",
+      "why": "the SSH rule the shell implements by deleting SSH_* from the child`s environment (src/harness.mjs)",
+      "files": {
+        "dsh-host-directory-picker-auto/README.md": "db2a66618c0c56776f5bc38cb763519bd9c4c296e3d49db5c2e81bb9bb9d7121"
+      }
+    },
+    {
+      "pattern": "dsh-subprocess-local/lib/runner-launch-*.js",
+      "why": "the Windows tree-kill precedent the shell copies: `taskkill /PID <pid> /T /F` (src/harness.mjs)",
+      "files": {
+        "dsh-subprocess-local/lib/runner-launch-COYGu0Dl.js": "674f0acce6cf7969a5cc9a5c188c7a8d76ff766434634b908d9a4b8a659b1c1a"
+      }
+    },
+    {
+      "pattern": "dsh-web-frontend/dist/favicon.svg",
+      "why": "the source of the app`s icon, read at build time by tools/make-icon.mjs",
+      "files": {
+        "dsh-web-frontend/dist/favicon.svg": "c61a62a9d47d8660f9cfe08aac6775ff0476f7d6c5053f7659c1f8493fd6d814"
+      }
+    }
+  ]
+}

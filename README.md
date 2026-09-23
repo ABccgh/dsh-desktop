@@ -81,7 +81,8 @@ against, and the harness runs on that Node, not on Electron's bundled one (see
 ```powershell
 npm start                        # run from source
 npm test                         # 101 tests over the pure modules, ~0.4 s
-npm run smoke                    # the acceptance ladder (19 checks) against the packaged build
+npm run smoke                    # the acceptance ladder (20 checks) against the packaged build
+npm run surface                  # is the installed DSH still the surface this was verified against?
 npm start -- "D:\some\project"   # start with that folder as the workspace
 npm start -- --settings          # open with the settings window showing
 npm start -- --language en       # force the shell's language, for one run
@@ -90,7 +91,14 @@ npm start -- --language en       # force the shell's language, for one run
 `npm run smoke` drives the packaged build and needs `npm run pack` first; `npm run smoke:dev` runs the
 same ladder against `electron .`. Either way it is a real launch of the real thing, and takes about a
 minute: the ladder includes a second launch with `--language en` to prove an explicit language really
-overrides the system's.
+overrides the system's, and it checks that the harness it started is the DSH version installed right
+now — so a green run is tied to a version instead of to "some harness".
+
+`npm run surface` answers the question an upgrade raises. The shell pins no DSH version — it follows
+the installation through a junction — so a new DSH arrives on its own, and what can move is the ground
+the shell stands on: the readiness line, the argv, the port schema, the auth-cookie prefix. This
+compares those files against `docs/agent-notes/dsh-surface.json`, which records the bytes last read
+and measured. A `CHANGED` line is a trigger to go and read, not a verdict that something broke.
 
 Set `DSH_DESKTOP_DIAG=1` to have startup probe, and log, whether each network layer can reach the
 harness. It is the first thing to reach for when the window does not load.
@@ -101,10 +109,10 @@ harness. It is the first thing to reach for when the window does not load.
 | --- | --- |
 | `src/` | The shell: Electron main, the child supervisor, the pure modules, the two pages |
 | `src/i18n.mjs` | Every string the shell shows, in Chinese and English, plus the language resolver |
-| `bin/` | `pack.mjs` (portable build), `smoke.mjs` (acceptance), `shortcut.ps1` (integration) |
+| `bin/` | `pack.mjs` (portable build), `smoke.mjs` (acceptance), `dsh-surface.mjs` (what the shell couples to in DSH), `shortcut.ps1` (integration) |
 | `tools/make-icon.mjs` | SVG → PNG → ICO, with the payload size checked against the declared one |
 | `test/` | `node --test`; every module that can be pure is pure so it can be tested without a disk |
-| `docs/agent-notes/` | The measurements behind the design: runbook, chronicle, decisions, board |
+| `docs/agent-notes/` | The measurements behind the design: runbook, chronicle, decisions, board — and `dsh-surface.json`, the DSH surface `npm run surface` compares against |
 
 ## Design, in one paragraph
 
@@ -119,8 +127,8 @@ turned out to be wrong.
 
 ## Status
 
-Working and verified on Windows 10/11 with DSH 0.1.5-rc.1, Node 26.8.1 and Electron 44.3.0. Three
-things are deliberately unfinished and are recorded rather than hidden:
+Working and verified on Windows 10/11 with DSH 0.1.5-rc.3 (re-verified 2026-09-23), Node 26.8.1 and
+Electron 44.3.0. Three things are deliberately unfinished and are recorded rather than hidden:
 
 - **One window and one workspace at a time.** Multiple windows are neither designed nor built. The
   setting that used to promise them — **Workspace windows** — was validated, rendered, and read by

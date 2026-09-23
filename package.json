@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "productName": "DSH Desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "DSH Desktop — a Windows desktop shell for DeepSeek Harness (supervises a child harness process)",
   "repository": {
@@ -22,6 +22,7 @@
     "smoke:dev": "node bin/smoke.mjs --dev",
     "icon": "electron tools/make-icon.mjs",
     "pack": "node bin/pack.mjs",
+    "surface": "node bin/dsh-surface.mjs",
     "installer": "electron-builder --win nsis --config electron-builder.yml",
     "shortcut": "pwsh -NoProfile -File bin/shortcut.ps1"
   },

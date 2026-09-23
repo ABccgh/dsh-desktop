@@ -22,6 +22,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveDshHome, resolveInstallAnchor } from '../src/paths.mjs';
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DEV = process.argv.includes('--dev');
 const USER_DATA = join(process.env.APPDATA ?? '', 'DSH Desktop');
@@ -38,6 +40,25 @@ const DEV_EXE = join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
  * resolved. The harness child is told nothing about language at all.
  */
 const FORCED_LANGUAGE = ['--language', 'en'];
+
+/**
+ * The DSH the shell must have run, resolved the way the shell resolves it.
+ *
+ * Without this, "the ladder passed" and "the ladder ran the version installed
+ * right now" are two different claims, and only the first one is machine
+ * checked — which is the gap that made a DSH upgrade unverifiable by the ladder
+ * alone. It is read from the same anchor the shell reads, not from a constant.
+ *
+ * A failure to resolve becomes a failed check rather than a throw: an unreadable
+ * installation is a reason to fail loudly with a reason, not to abort wordlessly.
+ */
+const EXPECTED_DSH = (() => {
+  try {
+    return { version: resolveInstallAnchor(resolveDshHome()).version, error: null };
+  } catch (error) {
+    return { version: null, error: error.message };
+  }
+})();
 
 const results = [];
 let failed = 0;
@@ -305,6 +326,19 @@ const argv = ps(
   `(Get-CimInstance Win32_Process -Filter "ProcessId=${String(children[0] ?? 0)}").CommandLine`,
 );
 check('the child runs our exact argv', /--profile web --port \d+ --no-open/.test(argv), argv.slice(0, 90));
+
+// Which DSH was that? The shell logs the anchor it resolved before it spawns
+// (`dsh: <version> at <dir>`), so the answer is in the log it already read.
+// Comparing it against the live anchor is what ties a green ladder to a version
+// instead of to "some harness".
+const loggedDsh = /dsh: (\S+) at /.exec(after)?.[1] ?? null;
+check(
+  'the harness child is the installed DSH version',
+  EXPECTED_DSH.version !== null && loggedDsh === EXPECTED_DSH.version,
+  EXPECTED_DSH.version === null
+    ? `installed dsh unreadable: ${EXPECTED_DSH.error}`
+    : `log=${String(loggedDsh)} installed=${EXPECTED_DSH.version}`,
+);
 
 try {
   const response = await fetch(`http://127.0.0.1:${String(port)}/`);

@@ -12,7 +12,9 @@ whose rule 7 is "this repo ships presets and nothing else". Do not move it in.
 1. **The harness is a child process, never in-process.** `installFailLoud` binds
    `process.on('unhandledRejection', …)` to `process.exit(1)`
    (`@deepseek-ai/dsh-app-boot/lib/index.js:1409,1420`, installed by `runProfile` at
-   `@deepseek-ai/dsh/lib/profile-boot-Dk-7KqJc.js:301-303`). Any stray rejection anywhere would kill
+   `@deepseek-ai/dsh/lib/profile-boot-Dk-7KqJc.js:301-303` — reached through the two-line
+   `lib/profile-boot-BP_C0vpU.js` re-export that `lib/bin.js:145` imports; re-read against
+   0.1.5-rc.3 on 2026-09-23). Any stray rejection anywhere would kill
    the whole app if the harness shared Electron's process. See `docs/agent-notes/DECISIONS.md` D-1.
 2. **Windows delivers no signal to the child.** Measured: `child.kill('SIGTERM' | 'SIGINT' |
    'SIGBREAK')` reports the signal back in the exit event while the child's own handler never runs.
@@ -57,6 +59,14 @@ whose rule 7 is "this repo ships presets and nothing else". Do not move it in.
   child, which its supervisor then correctly restarted. When a launch does nothing, list **both**
   process names before concluding anything — and prefer `npm run smoke`, which drives a real launch
   and fails loudly rather than quietly reusing someone else's window.
+- **A DSH upgrade is a verification, not an edit — and the shell must never pin a DSH version.**
+  `resolveInstallAnchor` follows the junction the harness maintains, so a new DSH arrives on its own
+  and the one thing that can go stale is the ground under the contracts. The order is
+  `npm run surface` → `node --test test/` → `npm run smoke:dev` → `npm run pack` → `npm run smoke`, and
+  only then `npm run surface -- --record` (see `RUNBOOK.md`). A `CHANGED` line is a **trigger to go and
+  read**, not a verdict: `surface` compares bytes, and which contract broke is a question only reading
+  the file can answer. Measured once end to end on 2026-09-23 (rc.1 → rc.3, surface byte-identical,
+  20/20 twice) — D-30.
 - **Every user-visible string goes through `src/i18n.mjs`, and a `role:` menu item is not exempt.**
   Measured on Electron 44.3.0: `{ role: 'reload' }` and its six siblings render English labels on
   Windows no matter what language the app runs in, so each one carries an explicit `label:` here —
@@ -88,6 +98,7 @@ npm run icon        # build/icon.png + build/icon.ico
 npm run pack        # dist\DSH Desktop\DSH Desktop.exe — portable, no extra toolchain
 npm run smoke       # the acceptance ladder against the packaged build (needs pack first)
 npm run smoke:dev   # the same ladder against `electron .`
+npm run surface     # is the installed DSH still the surface this was verified against?
 ```
 
 `npm install` installs Electron; the project's own `postinstall` then fetches and extracts its binary.
@@ -110,7 +121,8 @@ npm run smoke:dev   # the same ladder against `electron .`
 | `src/loading.html` | The pre-harness page and the failure page |
 | `src/settings.html`, `src/settings-preload.cjs` | The settings window and its bridge; `sandbox: true` means the preload must be CommonJS |
 | `bin/pack.mjs` | Portable packaging into `dist\DSH Desktop\`; calls rcedit's **binary**, not its missing wrapper |
-| `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) |
+| `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`); its 20th check ties a green run to the installed DSH version |
+| `bin/dsh-surface.mjs` | The DSH files this shell's contracts live in, compared with the bytes last read and measured (`npm run surface`, baseline `docs/agent-notes/dsh-surface.json`) |
 | `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
 | `tools/make-icon.mjs` | Icon: SVG → PNG (via an offscreen Electron window) → ICO |
 | `electron-builder.yml` | The NSIS installer target — **configured, never built**; `bin/pack.mjs` is the supported path |

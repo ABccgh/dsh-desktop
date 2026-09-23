@@ -13,7 +13,8 @@ that child on the system Node, booted from the user's own `web` profile.
 ## Architecture (verified)
 
 Each line names how it was established. Session of record: 2026-09-12, DSH 0.1.5-rc.1, Node v26.8.1,
-Electron 44.3.0.
+Electron 44.3.0. **Re-verified against DSH 0.1.5-rc.3 on 2026-09-23 — see the section at the end of
+this file for what was re-measured and what did not change.**
 
 - **The harness runs in a child process, and that is decided by a process-level kill switch, not by
   an ABI argument.** `installFailLoud` registers `process.on('unhandledRejection', handler)` and the
@@ -101,7 +102,8 @@ Electron 44.3.0.
 | `src/icon.svg` | Not present: the mark is read from the installed DSH frontend favicon at build time |
 | `tools/make-icon.mjs` | SVG → PNG (visible offscreen window) → hand-built ICO, with payload validation |
 | `bin/pack.mjs` | Portable packaging into `dist\DSH Desktop\`, including exe icon and version via rcedit's binary |
-| `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) |
+| `bin/smoke.mjs` | The acceptance ladder against a real launch (`npm run smoke`, `smoke:dev`) — **20 checks**, including which DSH version the child actually was |
+| `bin/dsh-surface.mjs` | The coupling surface: which installed DSH files this shell's contracts live in, compared against the bytes last read and measured (`npm run surface`) |
 | `bin/shortcut.ps1` | Start Menu and Desktop shortcuts, optionally pinned to a workspace |
 | `electron-builder.yml` | The NSIS installer target — **configured, never built** |
 | `test/*.test.mjs` | 101 tests over the pure modules (`npm test`, ~0.35 s) |
@@ -158,6 +160,19 @@ user's own `dsh web` on 3080 was process-identical (`9420`) before and after eve
   fix for Node's TLS failure against GitHub) but which a packaged Electron app rejects with a
   one-line stderr warning. Stripping it from the shell's own environment while keeping it for the
   child was **not** attempted; the warning is cosmetic and the app works with the variable set.
+- **Two DSH couplings the shell itself does not check, both holding today — found by the 0.1.5-rc.3
+  contract review.** `dsh/lib/bin.js:168` is `if (import.meta.main) await runCli();`, and
+  `resolveNodeExe` pins no minimum Node version: it takes the first `node.exe` on `PATH`. On a Node
+  without `import.meta.main` the child would load the module, never call `runCli`, exit 0 and print no
+  readiness line — the shell would spend its three restarts and then report "exited with code 0".
+  Measured here: Node v26.8.1, `typeof import.meta.main === 'boolean'`. And
+  `dsh-host-webserver/lib/index.js:142` is `port: z.natural().max(65535).required()`, which accepts 0;
+  a future `min(1)` or a falsy test would silently turn `--port 0` into a fixed port. Both files are in
+  the `npm run surface` baseline now, so a change to either is *reported* rather than discovered late.
+- **`src/url-line.mjs` requires a non-empty `url.port`, so a readiness line on port 80 would be
+  rejected.** `new URL('http://127.0.0.1:80/?token=x').port` is `""` (executed, not recalled).
+  Unreachable in practice — `--port 0` never yields 80 and the shell never asks for it — and recorded
+  rather than worked around, because the alternative is a parser that accepts a URL with no port.
 
 ## Stale claims to re-check
 
@@ -165,6 +180,10 @@ user's own `dsh web` on 3080 was process-identical (`9420`) before and after eve
   future version adds one-shot state, the no-probe rule would become load-bearing rather than merely
   simpler.
 - Port numbers, PIDs, and byte sizes above are a snapshot of one session. Re-measure before quoting.
+- **The rc.1 → rc.3 byte-identity table (at the end of this file) is evidence about those two
+  revisions only.** It says nothing about 0.1.7-rc.1, or about anything published after 2026-09-23.
+  `npm run surface` is the check that answers it for the next upgrade, and it answers it for the
+  *installed* DSH — not for a version read about somewhere.
 
 ## M1 hardening, measured (added after the plan's first milestone)
 
@@ -345,4 +364,101 @@ carrying as a "known gap" for three milestones.
   that sentence in the other repository was corrected to match.
 - **`README.zh.md`** was added, with the two READMEs linking to each other. The product speaks Chinese;
   the repository did not.
+
+## The 0.1.5-rc.3 update, measured (2026-09-23)
+
+Asked for as "dsh已更新到最新版本，对dsh desktop进行更新". The premise was checked before anything was
+changed, because "update the shell" had three possible meanings — run the new DSH, rebuild the artifact,
+correct the version in the record — and the honest answer is that the **runtime needed no change at
+all**, which is a claim that had to be established rather than asserted.
+
+**What the upgrade was.** `npm view @deepseek-ai/dsh dist-tags` → `{ latest: '0.1.5-rc.3',
+next: '0.1.7-rc.1', alpha: '0.1.7-alpha.2' }`, and the installation the shell resolves
+(`…\npm-cache\_npx\1e7f6d9597241db0\node_modules\@deepseek-ai\dsh`, reached through the
+`$DSH_HOME\profiles\node_modules\@deepseek-ai\dsh` junction) is 0.1.5-rc.3, unpacked 2026-09-23 22:57.
+So `latest` is what is installed. The user's own `dsh web` on 3080 was restarted onto it at 23:00:01 —
+PID **14972**, unchanged before and after every run below.
+
+**The measurement that decided the shape of this milestone: the shell's coupling surface is
+byte-identical between rc.1 and rc.3.** rc.1's tarballs were fetched from the npm registry and unpacked
+in memory — no rc.1 copy remains on disk — and each file was compared with the installed rc.3 file by
+sha256:
+
+| File | rc.1 | rc.3 |
+| --- | --- | --- |
+| `dsh/lib/bin.js` | 9165 B `0ff7f1d72c4e0cbe` | **identical** |
+| `dsh-web-app/lib/index.js` | 10306 B `f93d006de823bad3` | **identical** |
+| `dsh-web-app/lib/startup.js` | 2772 B `95a47053483fbe8e` | **identical** |
+| `dsh-web-app/cordis.patch.yml` | 18588 B `1c0209b817d05d25` | **identical** |
+| `dsh-client-connection/lib/index.js` | 32900 B `bbe7c9aa6d82a7a4` | **identical** |
+| `dsh-app-boot/lib/index.js` | 69668 B `d8fdfe41996a4fef` | **identical** |
+| `dsh-client-locale/lib/client.js` | 55547 B `cff36c3b5f57b0f2` | **identical** |
+| `dsh-host-directory-picker-auto/README.md` | 7301 B `db2a66618c0c5677` | **identical** |
+| `dsh-subprocess-local/lib/runner-launch-COYGu0Dl.js` | 60094 B `674f0acce6cf7969` | **identical** |
+| `dsh-web-frontend/dist/favicon.svg` | 3721 B `c61a62a9d47d8660` | **identical** |
+
+That is why not one line of `src/` changed: the readiness line, the argv hand-off, the port fallback,
+the auth-cookie prefix, the fail-loud kill switch, the locale rule and the icon's source are the same
+bytes as the build the earlier sessions measured.
+
+**An independent contract review, run in parallel, reached the same conclusion from the other
+direction.** Nine contracts were read one at a time against the installed rc.3 — the anchor; the argv
+(verified by *executing* the installed commander against `bin.js`'s own program, which yielded
+`{"mode":"profile","profile":"web","args":["--port","0","--no-open"]}`); the readiness line (still on
+stdout, `printUrl` default-on, still emitted under `--no-open`); the cookie prefix and its host-only
+scoping; the 401/303 fence; stdin EOF; `installFailLoud` (both `proc.exit(1)` lines and the
+`runProfile` call site, unchanged line-for-line); the locale rule; and the `taskkill /T /F` precedent.
+**Verdict: SOUND for all nine contracts.** Two couplings it found that this file did not previously
+cover are recorded under "Known gaps" above.
+
+**The ladder, and the one check it gained.** Both ladders pass **20/20** — `npm run smoke:dev` and
+`npm run smoke` against the rebuilt artifact. (The `19/19` readings elsewhere in this file and in
+`BOARD.md` are the runs of 2026-09-14, when the ladder had 19 checks; they are history and stay as
+they were written.) Readings, all from the logs:
+
+| Reading | Value |
+| --- | --- |
+| `the harness child is the installed DSH version` | `log=0.1.5-rc.3 installed=0.1.5-rc.3` — the **new** 20th check |
+| `dsh: 0.1.5-rc.3 at …` | every launch |
+| `the installed DSH changed: 0.1.5-rc.1 -> 0.1.5-rc.3` | exactly once, on the first launch after the upgrade |
+| `cleared 1 stale launch-token cookie(s)` | both dev launches — the sweep still matches rc.3's cookie names, which is what keeps the HTTP-431 blank window from coming back |
+| `ready: port=` | 54689, 64158 (dev ladder); 58329, 54615 (packaged ladder) — none of them 3080 |
+| `interface mounted: true`, `HTTP 431` | mounted every launch; 0 oversized-header refusals |
+| 3080's PID | 14972 before and after every run |
+| `state.json` `lastDshVersion` | `0.1.5-rc.1` → `0.1.5-rc.3` |
+
+Without the new check, "the ladder passed" and "the ladder ran the version that is installed now" are
+two different claims, and this session had to establish the second by hand — so it became a check.
+**It was falsified before it was trusted:** with the expected version planted as `0.0.0` the ladder
+reported `FAIL  the harness child is the installed DSH version — log=0.1.5-rc.3 installed=0.0.0` and
+`19/20 checks passed`, exit 1; restored, it is 20/20 again.
+
+**The icon was measured, not inferred.** `tools/make-icon.mjs` draws the mark from
+`dsh-web-frontend/dist/favicon.svg`, which is one of the byte-identical files above — but "so the icon
+is unchanged" is a different claim from a measurement, so `npm run icon` was run twice: both runs wrote
+`icon.png` `2E9D20F1…` and `icon.ico` `3E776B12…`, identical to each other and to the files already on
+disk. Nothing to regenerate, nothing to keep, and the rasteriser is deterministic here.
+
+**What was rebuilt.** `npm run pack` → `PACK OK`, all 11 structural checks plus `exe ProductName reads
+back as "DSH Desktop"`, **367.6 MB**, and the exe now reports FileVersion/ProductVersion **0.1.1**
+(taken from `package.json`, which moved 0.1.0 → 0.1.1 because a rebuilt artifact indistinguishable from
+the one it replaces cannot be told apart). The two shortcuts were deliberately **not** re-created: they
+point at the same exe path and carry no workspace argument, and `bin/shortcut.ps1` rewrites `Arguments`
+unconditionally, so running it could only lose information.
+
+**`npm run surface` exists because "nothing changed this time" should be checkable rather than
+remembered.** `bin/dsh-surface.mjs` records sha256 for 12 coupling patterns (13 files) in
+`docs/agent-notes/dsh-surface.json`, and reports `IDENTICAL / CHANGED / MOVED / MISSING` against the
+installed DSH: `--record` re-baselines after a verification, `--against` checks against another baseline.
+`CANNOT CHECK` (exit 2 — no install, no baseline, nothing compared) is deliberately distinct from a
+change (exit 1), because "could not read it" must never read like "it is fine". **Falsified on copies**
+of the baseline, never on the file in this tree: an altered sha → `CHANGED` + exit 1; a renamed hashed
+file → `MOVED` + exit 1; a missing baseline → `CANNOT CHECK` + exit 2.
+
+**One observation that is not resolved, and is not the shell's to resolve.** The last rc.1 run logged
+**75 `[page:error]` lines in its final three minutes** (Lexical #14/#19/#20/#63/#66, 22:49:12–22:52:06)
+while the user was working in the GUI — plausibly the reason DSH was updated at all. Under rc.3 the
+ladder logs **0**, but the ladder mounts the interface and quits without touching the editor, so that is
+not evidence the error is gone; it is evidence that the ladder does not exercise that path. Recorded
+rather than claimed.
 

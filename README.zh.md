@@ -72,7 +72,8 @@ harness 运行在那份 Node 上，不是 Electron 内置的那个（见 `docs/a
 ```powershell
 npm start                        # 从源码运行
 npm test                         # 101 个测试，只覆盖纯模块，约 0.4 秒
-npm run smoke                    # 针对打包产物的验收阶梯（19 项检查）
+npm run smoke                    # 针对打包产物的验收阶梯（20 项检查）
+npm run surface                  # 装着的 DSH 还是当初验证过的那一面吗？
 npm start -- "D:\some\project"   # 以该文件夹为工作区启动
 npm start -- --settings          # 启动时打开设置窗口
 npm start -- --language en       # 仅本次运行强制指定语言
@@ -80,7 +81,13 @@ npm start -- --language en       # 仅本次运行强制指定语言
 
 `npm run smoke` 驱动打包产物，需要先 `npm run pack`；`npm run smoke:dev` 对 `electron .` 跑同一套
 阶梯。两者都是真启动真程序，约一分钟：阶梯里包含**第二次**以 `--language en` 启动，用来证明显式
-语言确实覆盖系统语言。
+语言确实覆盖系统语言；它还会断言它启动的 harness 就是**当前安装的那个 DSH 版本** —— 于是一次全绿
+绑定的是一个版本，而不是「某个 harness」。
+
+`npm run surface` 回答升级带来的那个问题。外壳不 pin 任何 DSH 版本（它顺着 junction 跟随安装），
+所以新的 DSH 会自己到来；会移动的是外壳脚下那块地：就绪行、argv、端口 schema、认证 cookie 前缀。
+这条命令把它们与 `docs/agent-notes/dsh-surface.json`（记录着上次读过并实测过的那些字节）逐字节比较。
+报出 `CHANGED` 是**去读一遍的触发条件**，不是「契约坏了」的判决。
 
 设 `DSH_DESKTOP_DIAG=1` 会让启动过程探测并记录每一层网络能否到达 harness。窗口加载不出来时，
 这是第一个该看的地方。
@@ -91,10 +98,10 @@ npm start -- --language en       # 仅本次运行强制指定语言
 | --- | --- |
 | `src/` | 外壳本体：Electron 主进程、子进程监督器、纯模块、两个页面 |
 | `src/i18n.mjs` | 外壳会显示的所有文案（中英两份），以及语言解析器 |
-| `bin/` | `pack.mjs`（便携打包）、`smoke.mjs`（验收）、`shortcut.ps1`（系统集成） |
+| `bin/` | `pack.mjs`（便携打包）、`smoke.mjs`（验收）、`dsh-surface.mjs`（外壳与 DSH 的耦合面）、`shortcut.ps1`（系统集成） |
 | `tools/make-icon.mjs` | SVG → PNG → ICO，并核对载荷大小与声明一致 |
 | `test/` | `node --test`；凡是能做成纯函数的模块都做成纯的，好让它不碰磁盘就能测 |
-| `docs/agent-notes/` | 设计背后的实测记录：runbook、chronicle、decisions、board |
+| `docs/agent-notes/` | 设计背后的实测记录：runbook、chronicle、decisions、board，以及 `npm run surface` 用来比较的 `dsh-surface.json` |
 
 ## 设计，一段话
 
@@ -107,8 +114,8 @@ Electron 只是外壳。harness 以子进程方式跑在**系统 Node** 上，�
 
 ## 状态
 
-已在 Windows 10/11、DSH 0.1.5-rc.1、Node 26.8.1、Electron 44.3.0 上验证可用。有三件事是**故意
-未完成**并记录在案，而不是藏起来：
+已在 Windows 10/11、DSH 0.1.5-rc.3（2026-09-23 重新验证）、Node 26.8.1、Electron 44.3.0 上验证
+可用。有三件事是**故意未完成**并记录在案，而不是藏起来：
 
 - **同一时间只有一个窗口、一个工作区。** 多窗口既没设计也没实现。曾经承诺这件事的设置项
   **Workspace windows** 被校验、被渲染，却没有任何代码读取它；它已被删除，而不是留着一个无效的

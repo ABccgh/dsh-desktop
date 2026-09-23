@@ -46,17 +46,59 @@ Timestamps are local with a UTC offset, so the file name agrees with the file's 
 ## Verify end to end
 
 ```powershell
-npm run smoke         # the packaged build: 19 checks, exit code 0 when all pass
+npm run smoke         # the packaged build: 20 checks, exit code 0 when all pass
 npm run smoke:dev     # the same ladder against `electron .`
 ```
 
 The ladder is: readiness captured → the port is real and not 3080 → the interface mounted → no token
 in the log → **the shell resolved a language and said which, and it is the system's or the one asked
-for** → exactly one harness child on the right argv and port → an unauthenticated root request is
-refused → the user's own GUI is untouched → quitting reaps the child and clears its record → **then a
-second launch with `--language en`**, which must start its own harness, resolve to English on a Chinese
-system, and reap its child in turn.
+for** → exactly one harness child on the right argv and port → **that child is the DSH version
+installed right now** → an unauthenticated root request is refused → the user's own GUI is untouched →
+quitting reaps the child and clears its record → **then a second launch with `--language en`**, which
+must start its own harness, resolve to English on a Chinese system, and reap its child in turn.
 It leaves the app running if it fails, deliberately, so the state can be inspected.
+
+**The version check is what ties a green ladder to a DSH.** Without it, "the ladder passed" and "the
+ladder ran the build that is installed now" are two different claims and only the first is machine
+checked. The ladder reads the shell's own `dsh: <version> at <dir>` line and compares it with the
+anchor's manifest, so a stale anchor or a child started from somewhere else fails instead of passing.
+
+## After a DSH upgrade
+
+The shell pins no DSH version: it resolves
+`$DSH_HOME/profiles/node_modules/@deepseek-ai/dsh` through `realpathSync` on every launch, so an
+upgrade is picked up by the next start with nothing to change here. What an upgrade *can* move is the
+ground under the shell's contracts, and that is what these three commands are for, in this order:
+
+```powershell
+npm run surface       # 1. is the coupling surface still the bytes last read and measured?
+node --test test/     # 2. the pure half, ~0.4 s
+npm run smoke:dev     # 3. a real launch; then `npm run pack` and `npm run smoke` for the artifact
+```
+
+Read `surface` as a **trigger, not a verdict**: `CHANGED`/`MOVED` names files whose change means "go
+and read them" — the `why` field in `docs/agent-notes/dsh-surface.json` says which shell-side reader
+depends on each one — and only after reading and re-running the ladder does
+
+```powershell
+npm run surface -- --record      # re-record: a statement that the new bytes were verified
+```
+
+`--record` without that is a rubber stamp, and a rubber stamp is the failure mode this command exists
+to prevent. A `CANNOT CHECK` line (exit code 2) means nothing was compared — it is not a pass, and it
+must not be read as one.
+
+Then confirm what actually ran, which is the one thing the exit codes cannot tell you:
+
+```powershell
+$log = Get-ChildItem "$env:APPDATA\DSH Desktop\logs\*.log" | Sort-Object LastWriteTime | Select-Object -Last 1
+Select-String -Path $log.FullName -Pattern 'dsh: |installed DSH changed|ready: port=|interface mounted'
+```
+
+The expected lines are `dsh: <new version> at <dir>`, and — on the **first** start after the upgrade
+only — `the installed DSH changed: <old> -> <new>`. Whichever launch happens first consumes that
+notice, so if the ladder ran before you did, the line is in the ladder's log and your own start will
+not repeat it.
 
 **The language checks can only prove the shell's half, and that is worth knowing before trusting
 them.** They read the resolved language out of the log; whether the *GUI* inside the window followed is

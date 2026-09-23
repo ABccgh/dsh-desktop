@@ -551,5 +551,47 @@ would reverse it. Never rewrite an entry; supersede it with a new one.
   `git rm -r --cached docs/agent-notes`, an ignore rule, and a note in `PROJECT.md` pointing at wherever
   they live instead — not a rewrite of history.
 
+## D-30: After a DSH upgrade, what does the shell have to change?
+
+- **Decided:** **nothing in `src/` — by design** — and the update is a procedure rather than an edit:
+  prove which DSH the app actually runs, re-run the ladder, then re-record the coupling surface. The
+  one code addition is a *check*, not a fix: `bin/smoke.mjs` now asserts the child it started is the
+  installed version. `bin/dsh-surface.mjs` (`npm run surface`) turns "the surface is unchanged" into a
+  command with an exit code.
+- **Because the shell pins no DSH version on purpose.** `resolveInstallAnchor` resolves
+  `$DSH_HOME/profiles/node_modules/@deepseek-ai/dsh` through `realpathSync` on every launch, so the
+  junction the harness maintains is the single source of truth and an upgrade arrives by itself.
+  Pinning a version would let the shell disagree with the harness the user is actually running, which
+  is the one failure that design exists to prevent.
+- **The evidence for "nothing to change" is a byte comparison, not an opinion.** rc.1's tarballs were
+  fetched from the npm registry and unpacked in memory, and every file the shell's contracts live in is
+  byte-identical in rc.3 (table in `PROJECT.md`). An independent contract review read nine contracts
+  against the installed rc.3 and returned **SOUND** for all nine. Then the ladder — the check that can
+  actually refute the claim — passed **20/20 from source and 20/20 from the packaged build**, with the
+  log naming `dsh: 0.1.5-rc.3` and `the installed DSH changed: 0.1.5-rc.1 -> 0.1.5-rc.3` firing once.
+- **Why 0.1.1 instead of keeping 0.1.0.** The exe's FileVersion/ProductVersion come from
+  `package.json`, and this milestone rebuilds the artifact. A rebuilt artifact that still calls itself
+  0.1.0 is indistinguishable from the one it replaced, so the version is the only place the update can
+  be seen. No behaviour changed, which is what a patch bump should mean.
+- **The new ladder check was falsified before it was trusted.** With the expected version planted as
+  `0.0.0` it reported `FAIL the harness child is the installed DSH version — log=0.1.5-rc.3
+  installed=0.0.0` and exit 1; restored, 20/20 again. `npm run surface` was falsified the same way, on
+  **copies** of the baseline: altered sha → `CHANGED` + exit 1, renamed hashed file → `MOVED` + exit 1,
+  missing baseline → `CANNOT CHECK` + exit 2. A guard that has never been shown to fail is not a guard.
+- **Rejected:** (1) pinning or vendoring `@deepseek-ai/dsh` — it contradicts the junction design above;
+  (2) moving to `dist-tags.next` (0.1.7-rc.1) — the user said "latest", and `latest` is 0.1.5-rc.3;
+  (3) regenerating the icon because an upgrade "probably" moved the mark — the favicon is
+  byte-identical and two `npm run icon` runs reproduced the existing bytes, so the inference was
+  replaced by a measurement whose answer was "nothing to do"; (4) re-running `bin/shortcut.ps1` — same
+  target path, no workspace argument, and the script rewrites `Arguments` unconditionally; (5) letting
+  the ladder or a test call `--record`, which would turn the baseline into a rubber stamp; (6) deleting
+  the stale `maxWindows` key from the user's own `config.json` — unknown keys are dropped by design and
+  the user's config is not ours to edit.
+- **Reversed by:** the coupling surface genuinely moving. A `CHANGED` line from `npm run surface` is
+  the signal, and each baseline entry's `why` names the shell-side reader to re-read first. If DSH ever
+  ships a different ready-line format or renames the auth cookie, the reversal is a code change in the
+  module that owns that contract (`src/url-line.mjs`, `src/main.js`) — never a relaxation of the check.
+  The two couplings that remain unchecked are written down in `PROJECT.md`.
+
 
 
